@@ -1,0 +1,63 @@
+name: leml
+# Conda environment for the landscape-evolution-ml pipeline
+# Saturay et al. (2025), JGR: Earth Surface
+#
+# Create environment:
+#   conda env create -f environment.yml
+#
+# Activate:
+#   conda activate leml
+#
+# Notes
+# -----
+# This file pins the top-level dependencies to the versions used during
+# dataset generation and model training. See DATA_PROVENANCE.md for full
+# documentation. Transitive dependencies are resolved by conda at install time.
+#
+# Tested on Linux x86_64. Mac and Windows users may need to remove the
+# conda-forge channel pin or adjust build strings if package resolution fails.
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # --- Python ---
+  - python=3.12.2
+
+  # --- Core scientific stack ---
+  - numpy=2.0.1
+  - scipy=1.15.1
+  - pandas=2.2.3
+  - statsmodels=0.14.4
+
+  # --- Landscape evolution modeling ---
+  - landlab=2.9.2        # LEM implementation (Barnhart et al., 2020)
+
+  # --- Machine learning ---
+  - scikit-learn=1.6.1   # ML algorithms, nested CV, feature importance
+
+  # --- Drainage network analysis ---
+  - networkx=3.4.2       # Drainage network construction and graph analysis
+                         # (Hagberg et al., 2008)
+
+  # --- Terrain analysis ---
+  - richdem=2.3.0        # DEM hydrological analysis
+
+  # --- Knee-point detection ---
+  - kneed=0.8.5          # Knee/elbow detection in curves (Arvai, 2023)
+
+  # --- Visualization ---
+  - matplotlib-base=3.10.0
+
+  # --- Geospatial (for DEM I/O in case study application) ---
+  - xarray=2024.11.0
+
+  # --- Notebooks ---
+  - jupyterlab=4.3.4
+  - ipywidgets=8.1.5
+
+  # --- Utilities ---
+  - pyyaml=6.0.2
+  - joblib=1.4.2          # Parallel processing (used internally by sklearn)
+  - tqdm                  # Progress bars (pin relaxed; any recent version)
