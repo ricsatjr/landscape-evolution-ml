@@ -169,15 +169,19 @@ in the mechanical constraint filter (`evaluate_relief_feasibility()`).
 See `environment.yml` for the exact software versions used during dataset
 generation. Key dependencies:
 
-| Package     | Version |
-|-------------|---------|
-| landlab     | 2.8.0   |
-| numpy       | 2.0.1   |
-| pandas      | 2.2.2   |
-| scikit-learn| 1.5.1   |
-| scipy       | 1.15.1  |
-| networkx    | 3.4.2   |
-| python      | 3.11    |
+| Package      | Version  |
+|--------------|----------|
+| python       | 3.12.2   |
+| landlab      | 2.9.2    |
+| numpy        | 2.0.1    |
+| pandas       | 2.2.3    |
+| scikit-learn | 1.6.1    |
+| scipy        | 1.15.1   |
+| networkx     | 3.4.2    |
+| matplotlib   | 3.10.0   |
+| richdem      | 2.3.0    |
+| kneed        | 0.8.5    |
+| statsmodels  | 0.14.4   |
 
 ---
 
