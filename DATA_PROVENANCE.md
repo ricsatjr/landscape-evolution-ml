@@ -8,7 +8,11 @@ conventions used to ensure reproducibility of each individual landscape.
 
 The dataset consists of synthetic elevation grids and their corresponding
 landscape evolution (LE) parameter sets, generated using the forward model
-pipeline in `01_generate_landscapes.py`.
+pipeline in `01_generate_landscapes.py`. The topographic feature vectors used
+for machine learning model training are extracted from these grids using
+`02_extract_features.py`, which operates in two stages: rasnet extraction
+(flow routing and drainage network construction) and feature computation
+(raster and network feature derivation).
 
 ---
 
@@ -62,6 +66,42 @@ landscape in the entire dataset has a unique, reproducible seed.
 
 **Example:** The 3rd landscape (index 2) of job 7 uses `elev_seed = 702`.
 
+### 3. Feature Extraction Noise Seed
+
+Controls the random elevation measurement noise added to each landscape
+during **Stage 1 of `02_extract_features.py`** (rasnet extraction). This
+noise simulates DEM measurement uncertainty (±`elev_err` meters) applied
+before flow routing and feature extraction.
+
+```python
+elev_seed = int(f"{job_id}{landscape_idx}{ts_index}") + 1
+```
+
+This is constructed by string-concatenating `job_id`, `landscape_idx`, and
+`ts_index` as integers, converting to int, and adding 1.
+
+**Example:** For job 7, landscape index 2, time step 99:
+```python
+elev_seed = int("7299") + 1 = 7300
+```
+
+**Why a different formula from the landscape generation seed?**
+
+The landscape generation seed (`100 * job_id + landscape_idx`) controls the
+initial surface noise that seeds the geomorphic evolution itself — it
+determines the early drainage divide positions and flow routing structure.
+The feature extraction seed controls noise added *after* evolution is
+complete, simulating DEM observation error.
+
+Using the same formula for both would create a correlation between a
+landscape's evolutionary history and its simulated measurement noise. For
+example, landscapes with similar `job_id` and `landscape_idx` values could
+share measurement noise patterns that also resemble their initial conditions,
+introducing a subtle form of data leakage into the feature vectors. The
+string-concatenation formula ensures the feature extraction seeds are
+numerically distinct from — and uncorrelated with — the landscape generation
+seeds across the full dataset.
+
 ---
 
 ## File Naming Convention
@@ -101,6 +141,66 @@ of the core nodes of the grid at that time step.
 **Example:** `elevts-7-2-99.npy` is the final (steady-state) snapshot
 of the 3rd landscape (index 2) of job 7.
 
+### Rasnet Intermediate Files
+
+Stage 1 of `02_extract_features.py` produces intermediate rasnet files
+containing the processed Landlab grid, watershed mask, and NetworkX drainage
+network for each landscape. These are saved before feature computation
+because flow routing and network construction are computationally expensive.
+Saving the intermediate objects allows Stage 2 (feature computation) to be
+rerun independently — for example, when experimenting with alternative
+feature definitions — without repeating the flow routing.
+
+```
+rasnet-n{elev_err}-{job_id}-{landscape_idx}-{ts_index}.pkl
+```
+
+where `elev_err` is the elevation noise magnitude in meters (integer).
+
+**Example:** `rasnet-n10-7-2-99.pkl` is the rasnet file for the 3rd
+landscape of job 7, with 10 m elevation noise, at steady-state (ts=99).
+
+> **Note on published dataset naming:** The rasnet files in the published
+> dataset (Zenodo archive) were generated before varying noise levels was
+> considered, and do not include the `n{elev_err}` prefix. Their naming
+> convention is:
+> ```
+> rasnet-{job_id}-{landscape_idx}-{ts_index}.pkl
+> ```
+> All published rasnet files used `elev_err = 10 m`.
+> The refactored `02_extract_features.py` uses the `n{elev_err}` prefix for
+> newly generated files to support future experiments with different noise
+> levels. If you are loading the published dataset with the refactored code,
+> you will need to adjust the glob pattern in `run_stage2_features()` from
+> `rasnet-n*-{job_id}-*-*.pkl` to `rasnet-{job_id}-*-*.pkl`.
+
+Each rasnet `.pkl` file contains a list:
+```python
+[le_params, mg, mask, chNet, wsOutlets, wsOutletsDA]
+```
+
+| Element      | Type                  | Description                                          |
+|--------------|-----------------------|------------------------------------------------------|
+| `le_params`  | dict                  | LE parameter labels (u, kh, ks, ly) and identifiers |
+| `mg`         | RasterModelGrid       | Landlab grid with elevation and drainage fields      |
+| `mask`       | np.ndarray (bool)     | Valid node mask, excluding boundary-connected cells  |
+| `chNet`      | nx.DiGraph            | Drainage network with modified Strahler orders       |
+| `wsOutlets`  | np.ndarray (int)      | Node IDs of valid watershed outlets                  |
+| `wsOutletsDA`| list of int           | Drainage areas (cells) of valid watershed outlets    |
+
+### Feature DataFrame Files
+
+Stage 2 of `02_extract_features.py` produces the final feature DataFrames
+used for ML model training:
+
+```
+features-{job_id}.pkl
+```
+
+Each `.pkl` file is a pandas DataFrame with one row per landscape and
+columns for LE parameter labels, derived labels (`log_u_ks`, `log_kh_ks`),
+and the 39 topographic features described in Tables 2–3 of the paper.
+
 ---
 
 ## Exact Reproduction of a Specific Landscape
@@ -127,6 +227,22 @@ evolve_landscape(mg, u=params['u'], kh=params['kh'], ks=params['ks'])
 ```
 
 See `01_generate_landscapes.py` for the full working implementation.
+
+To reproduce the feature extraction noise applied to the same landscape:
+
+```python
+# Elevation noise seed for feature extraction (Stage 1 of 02_extract_features.py)
+ts_index = 99  # steady-state snapshot
+elev_seed_features = int(f"{job_id}{landscape_idx}{ts_index}") + 1
+
+# Load and add noise (matches 02_extract_features.py exactly)
+np.random.seed(elev_seed_features)
+noise = (np.random.rand(mg.number_of_nodes) - 0.5) * elev_err * 2
+mg.at_node['topographic__elevation'] += noise
+```
+
+See Seed Convention 3 above for the full rationale behind using a separate
+formula for the feature extraction seed.
 
 ---
 
