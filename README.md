@@ -3,8 +3,10 @@
 **A machine learning pipeline for estimating landscape evolution parameters from topography**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
-[![Landlab 2.8.0](https://img.shields.io/badge/landlab-2.8.0-green.svg)](https://landlab.readthedocs.io/)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![Landlab 2.9.2](https://img.shields.io/badge/landlab-2.9.2-green.svg)](https://landlab.readthedocs.io/)
+[![scikit-learn 1.6.1](https://img.shields.io/badge/scikit--learn-1.6.1-orange.svg)](https://scikit-learn.org/)
+[![networkx 3.4.2](https://img.shields.io/badge/networkx-3.4.2-red.svg)](https://networkx.org/)
 
 ---
 
@@ -150,7 +152,7 @@ The forward model simulates the growth of a linear mountain range under tectonic
 
 ∂z/∂t = U + Kh∇²z − Ks · A^0.5 · |∇z|
 
-Implemented using [Landlab v2.8.0](https://landlab.readthedocs.io/) components:
+Implemented using [Landlab v2.9.2](https://landlab.readthedocs.io/) components:
 
 | Process | Landlab Component |
 |---------|------------------|
