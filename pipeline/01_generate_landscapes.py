@@ -88,11 +88,12 @@ KS_MIN, KS_MAX = 1e-7, 1e-2   # Stream incision coefficient (1/yr)
 LY_MIN, LY_MAX = 5e3,  20e3   # Grid width Ly (m)
 
 # --- Characteristic length scale constraints (Theodoratos et al., 2018) ---
-# lc = sqrt(Kh/Ks) must satisfy: MINLC_X_DX * dx <= lc <= Ly / LC_MAXLC
+# lc = sqrt(Kh/Ks) must satisfy: MINLC_X_DX * dx <= lc <= (Ly/2) / LC_MAXLC
 MINLC_X_DX = 5    # lc must be at least 5x the grid resolution
-LC_MAXLC   = 5    # lc must be no more than 1/5 of Ly
-                  # (ensures hillslope-valley transition is resolved by grid
-                  #  but not larger than the domain; Section 2.2 in paper)
+LC_MAXLC   = 5    # lc must be no more than 1/5 of (Ly/2), i.e. lc <= Ly/10
+                  # Ly/2 is the divide-to-outlet distance (divide forms at
+                  # domain centre); constraint ensures lc is resolved within
+                  # a single drainage basin (Section 2.2 in paper)
 
 # --- Initial elevation noise ---
 KZ0 = 0.001       # Noise scale: initial elevations drawn from [0, KZ0 * dx]
