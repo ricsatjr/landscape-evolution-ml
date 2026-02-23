@@ -95,10 +95,11 @@ TARGET_DISPLAY = {
     'kh':        {'label': r'$K_h$',         'unit': r'$\mathrm{m^2\,yr^{-1}}$'},
     'ks':        {'label': r'$K_s$',         'unit': r'$\mathrm{yr^{-1}}$'},
 
-    # Dimensionless parameter ratios (stored as log10 in features-*.pkl)
-    'log_u_ks':  {'label': r'$U/K_s$',       'unit': r'$\mathrm{m}$'},
-    'log_kh_ks': {'label': r'$K_h/K_s$',     'unit': r'$\mathrm{m^2}$'},
-    'log_u_kh':  {'label': r'$U/K_h$',       'unit': r'$\mathrm{m^{-1}}$'},
+    # Dimensionless parameter ratios (stored as raw values in features-*.pkl;
+    # log10-transformed at training time in 03_train_models.py)
+    'u_ks':  {'label': r'$U/K_s$',       'unit': r'$\mathrm{m}$'},
+    'kh_ks': {'label': r'$K_h/K_s$',     'unit': r'$\mathrm{m^2}$'},
+    'u_kh':  {'label': r'$U/K_h$',       'unit': r'$\mathrm{m^{-1}}$'},
 }
 
 
