@@ -836,7 +836,7 @@ def run_stage2_features(data_dir, output_dir, job_id):
 
     The output DataFrame has one row per landscape with columns for:
       - LE parameter labels: u, kh, ks, ly, job_id, landscape_idx, ts_index
-      - Derived labels: log_u_ks = log10(u/ks), log_kh_ks = log10(kh/ks)
+      - Derived labels: u_ks = u/ks, kh_ks = kh/ks  (raw ratios; log-transformed at training time)
       - 39 topographic features (Tables 2-3 in paper)
 
     Parameters
@@ -882,9 +882,9 @@ def run_stage2_features(data_dir, output_dir, job_id):
         raster_features  = compute_raster_features(mg, mask)
         network_features = compute_network_features(chNet, mg)
 
-        # Add derived label columns (target variables for ML models)
-        le_params['log_u_ks']  = np.log10(le_params['u']  / le_params['ks'])
-        le_params['log_kh_ks'] = np.log10(le_params['kh'] / le_params['ks'])
+        # Add derived label columns (raw ratios; log10-transformed at training time in 03_train_models.py)
+        le_params['u_ks']  = le_params['u']  / le_params['ks']
+        le_params['kh_ks'] = le_params['kh'] / le_params['ks']
 
         row = {**le_params, **raster_features, **network_features}
         all_rows.append(row)
