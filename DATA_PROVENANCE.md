@@ -269,7 +269,7 @@ reference.
 | `LY_MIN`       | 5,000 m                | Minimum grid width                                  |
 | `LY_MAX`       | 20,000 m               | Maximum grid width                                  |
 | `MINLC_X_DX`   | 5                      | Minimum lc as multiple of dx (lc >= 5*dx)           |
-| `LC_MAXLC`     | 5                      | Maximum lc as fraction of Ly (lc <= Ly/10)          |
+| `LC_MAXLC`     | 5                      | lc <= (Ly/2) / LC_MAXLC = Ly/10; Ly/2 is the divide-to-outlet distance |
 | `KZ0`          | 0.001                  | Initial noise scale factor: noise in [0, KZ0*dx]   |
 | `COHESION`     | 150,000 Pa             | Rock cohesion for Schmidt & Montgomery (1995) limit |
 | `FRICTION_ANGLE` | 20 degrees           | Friction angle for stability envelope               |
