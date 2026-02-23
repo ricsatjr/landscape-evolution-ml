@@ -25,7 +25,7 @@ Usage
     python 03_train_models.py \\
         --data-dir data/features \\
         --output-dir outputs \\
-        --labels log_u_ks log_kh_ks \\
+        --labels u_ks kh_ks \\
         --n-outer 10 --n-inner 5 --n-iter 20
 
     # Train on individual parameters instead of ratios
@@ -122,40 +122,34 @@ def load_features(data_dir: str, job_ids: list = None) -> pd.DataFrame:
 
 
 def split_features_labels(df: pd.DataFrame, label_cols: list):
-    """Split a combined DataFrame into feature matrix and label matrix.
+    """Split combined DataFrame into feature matrix X and label matrix y.
+
+    All label columns are log10-transformed here, whether they are raw LE
+    parameters (u, kh, ks) or raw ratios (u_ks, kh_ks, u_kh).  Ratios are
+    stored untransformed in features-*.pkl so the DataFrame remains
+    self-describing; the log transform is applied in this single location
+    rather than being distributed across scripts.
 
     Parameters
     ----------
     df : pd.DataFrame
     label_cols : list of str
-        Target columns to use as y.  Both raw LE parameters (``u``, ``kh``,
-        ``ks``) and pre-computed log-ratios (``log_u_ks``, ``log_kh_ks``) are
-        valid.
+        Any subset of: u, kh, ks, u_ks, kh_ks, u_kh
 
     Returns
     -------
-    X : pd.DataFrame  — topographic features (all columns not recognised as
-                         LE parameters or derived labels)
-    y : pd.DataFrame  — selected labels, log₁₀-transformed where needed
+    X : pd.DataFrame  — topographic features
+    y : pd.DataFrame  — log10-transformed targets
     """
-    # Columns that are LE parameters or derived quantities (not features)
-    non_feature_cols = {'u', 'kh', 'ks', 'log_u_ks', 'log_kh_ks', 'u_kh',
-                        'u_ks', 'kh_ks'}
-    feature_cols = [c for c in df.columns if c not in non_feature_cols]
-    X = df[feature_cols]
+    # All columns that are LE parameters or derived quantities (not features)
+    non_feature_cols = {'u', 'kh', 'ks', 'u_ks', 'kh_ks', 'u_kh'}
+    X = df[[c for c in df.columns if c not in non_feature_cols]]
 
-    # Derived log-ratio columns are already in log₁₀ space; raw LE parameters
-    # need to be log-transformed here.
-    raw_cols   = [c for c in label_cols if c in {'u', 'kh', 'ks', 'u_kh', 'u_ks', 'kh_ks'}]
-    ratio_cols = [c for c in label_cols if c in {'log_u_ks', 'log_kh_ks'}]
+    missing = [c for c in label_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Label columns not found in DataFrame: {missing}")
 
-    y_parts = []
-    if ratio_cols:
-        y_parts.append(df[ratio_cols])
-    if raw_cols:
-        y_parts.append(np.log10(df[raw_cols]))
-
-    y = pd.concat(y_parts, axis=1)[label_cols]   # preserve requested order
+    y = np.log10(df[label_cols])
     return X, y
 
 
@@ -652,11 +646,11 @@ def parse_args():
     )
     p.add_argument(
         '--labels', nargs='+',
-        default=['log_u_ks', 'log_kh_ks'],
+        default=['u_ks', 'kh_ks'],
         help=(
-            'Target columns to train on.  Use log_u_ks / log_kh_ks for '
-            'dimensionless ratios (recommended) or u / kh / ks for individual '
-            'parameters.'
+            'Target columns to train on.  Use u_ks / kh_ks for dimensionless '
+            'ratios (recommended) or u / kh / ks for individual parameters.  '
+            'All columns are log10-transformed at training time.'
         ),
     )
     p.add_argument('--test-fraction', type=float, default=0.1,
