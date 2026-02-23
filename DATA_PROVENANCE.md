@@ -214,13 +214,15 @@ To exactly reproduce landscape `landscape_idx` from job `job_id`:
 
 ```python
 import numpy as np
-from leml.params import sample_le_parameters, apply_constraints
-from leml.forward import initialize_grid, evolve_landscape
+
+# All functions below are defined in 01_generate_landscapes.py.
+# This is illustrative pseudocode; run 01_generate_landscapes.py directly
+# to reproduce the full dataset.
 
 # 1. Reproduce the parameter set
 np.random.seed(job_id)
 df = sample_le_parameters(...)
-df = apply_constraints(df, ...)
+df = apply_constraints(df)
 params = df.iloc[landscape_idx]
 
 # 2. Reproduce the elevation grid with the correct seed
