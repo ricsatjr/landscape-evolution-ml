@@ -34,6 +34,25 @@ equivalent: `job_id == tmux_sess`.
 
 ---
 
+## Dataset Composition
+
+The published dataset was generated across 95 independent parallel jobs in
+five batches, producing 950 synthetic landscapes in total (10 landscapes per
+job). All jobs were run under identical conditions; the only difference between
+jobs is the random seed, which is deterministically derived from `job_id` as
+described in the Random Seed Convention below.
+
+| Batch | Job ID range    | Jobs |
+|-------|-----------------|------|
+| 1     | 121701–121725   | 25   |
+| 2     | 122001–122025   | 25   |
+| 3     | 122601–122615   | 15   |
+| 4     | 123101–123120   | 20   |
+| 5     | 130301–130310   | 10   |
+| **Total** |             | **95 (950 landscapes)** |
+
+---
+
 ## Random Seed Convention
 
 Two levels of random seeds are used, both deterministically derived from
