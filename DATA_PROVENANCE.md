@@ -271,7 +271,24 @@ See Seed Convention 3 above for the full rationale behind using a separate
 formula for the feature extraction seed.
 
 ---
+## Legacy Dataset Note
 
+The dataset archived on Zenodo (doi.org/10.5281/zenodo.18752620) was generated
+with the original development code and differs from the output of the refactored
+`02_extract_features.py` in the following ways:
+
+- `elev_std` (raw standard deviation) was replaced by `Z_cv` (coefficient of
+  variation = elev_std / elev_mean)
+- `elev_min` and `grad_min` were dropped
+- 14 hypsometric percentile features (`elev_area_*`) were dropped
+- 3 network features (`num_trees`, `WA_sumlen_edges`, `WA_max_path`) were dropped
+- All remaining features were renamed to the conventions in `display_labels.py`
+
+The trained models archived at doi.org/10.5281/zenodo.18739197 were trained on
+the legacy dataset. The full column mapping is documented in the Zenodo record.
+A future version of both records will reflect the refactored pipeline.
+
+---
 ## Physical Parameters and Fixed Constants
 
 The following constants were fixed across all landscape generation runs.
