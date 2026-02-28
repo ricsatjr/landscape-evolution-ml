@@ -970,8 +970,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    job_id = args.job_id if args.job_id == 'all' else int(args.job_id)
-    rasnet_dir = args.rasnet_dir if args.rasnet_dir else args.output_dir
+    #job_id = args.job_id if args.job_id == 'all' else int(args.job_id)
+    #rasnet_dir = args.rasnet_dir if args.rasnet_dir else args.output_dir
+
+    rasnet_dir = args.rasnet_dir if args.rasnet_dir else (
+    args.output_dir if args.stage == 'all' else args.data_dir
+)
 
     if args.stage in ('rasnet', 'all'):
         run_stage1_rasnet(
