@@ -33,22 +33,31 @@ Usage
 -----
     # Run Stage 1 only (rasnet extraction):
     python 02_extract_features.py --stage rasnet \\
-        --data-dir data/landscapes/ --job-id 42 --output-dir data/rasnet/
+        --data-dir data/landscapes/ --job-id 42 --rasnet-dir data/rasnet/
 
     # Run Stage 2 only (feature computation from saved rasnets):
     python 02_extract_features.py --stage features \\
         --data-dir data/rasnet/ --job-id 42 --output-dir data/features/
 
-    # Run both stages end-to-end:
+    # Run both stages end-to-end with separate directories:
+    python 02_extract_features.py --stage all \\
+        --data-dir data/landscapes/ --job-id 42 \\
+        --rasnet-dir data/rasnet/ --output-dir data/features/
+
+    # Run both stages with rasnet and features in the same directory:
     python 02_extract_features.py --stage all \\
         --data-dir data/landscapes/ --job-id 42 --output-dir data/features/
 
 Arguments
 ---------
     --stage         Pipeline stage to run: 'rasnet', 'features', or 'all'
-    --data-dir      Input data directory
+    --data-dir      Input data directory (elevts for 'rasnet'; rasnet files
+                    for 'features'; elevts for 'all')
     --job-id        Job identifier for filtering files (int, or 'all' for all)
-    --output-dir    Directory for output files (default: current directory)
+    --rasnet-dir    Directory for rasnet intermediate files; output of Stage 1
+                    and input of Stage 2. Defaults to --output-dir if not set.
+    --output-dir    Directory for final features-{job_id}.pkl output
+                    (default: current directory)
     --elev-err      Elevation measurement error magnitude in meters (default: 10)
     --ts-index      Time step index to extract from elevation time series
                     (default: 99, i.e., the final steady-state snapshot)
@@ -940,7 +949,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--output-dir', type=str, default='.',
-        help="Output directory for rasnet or feature files (default: current)."
+        help="Output directory for feature pkl files (default: current)."
+    )
+    parser.add_argument(
+        '--rasnet-dir', type=str, default=None,
+        help=(
+            "Directory for rasnet intermediate files. Used as output for "
+            "'rasnet' stage and input for 'features' stage. "
+            "Defaults to --output-dir if not specified."
+        )
     )
     parser.add_argument(
         '--elev-err', type=float, default=ELEV_ERR,
@@ -954,11 +971,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     job_id = args.job_id if args.job_id == 'all' else int(args.job_id)
+    rasnet_dir = args.rasnet_dir if args.rasnet_dir else args.output_dir
 
     if args.stage in ('rasnet', 'all'):
         run_stage1_rasnet(
             data_dir=args.data_dir,
-            output_dir=args.output_dir,
+            output_dir=rasnet_dir,
             job_id=job_id,
             elev_err=args.elev_err,
             ts_index=args.ts_index,
@@ -966,7 +984,7 @@ if __name__ == "__main__":
 
     if args.stage in ('features', 'all'):
         run_stage2_features(
-            data_dir=args.output_dir if args.stage == 'all' else args.data_dir,
+            data_dir=rasnet_dir,
             output_dir=args.output_dir,
             job_id=job_id,
         )
