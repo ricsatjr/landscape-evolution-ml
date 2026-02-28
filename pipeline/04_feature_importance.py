@@ -227,7 +227,7 @@ def compare_full_vs_reduced(
     git_hash : str
     figure_width_cm : float
     """
-    models   = list(full_results.keys())
+    models   = [k for k in full_results.keys() if k != '_meta']
     metrics  = ['r2', 'rmse']
     metric_labels = [r'$R^2$', r'$RMSE$']
     fw = figure_width_cm / 2.54
@@ -396,7 +396,7 @@ def analyze_feature_importance(
         Importance ranks per model and median rank, sorted by median rank.
         Includes a ``'related features'`` column listing cluster companions.
     """
-    models = list(results.keys())
+    models = [k for k in results.keys() if k != '_meta']
     fig, axes = plt.subplots(
         nrows=2, ncols=max(1, len(models) // 2),
         sharex=False, figsize=(19 / 2.54, 4),
@@ -603,13 +603,23 @@ def main():
             random_state=args.random_state,
             n_iter=args.n_iter,
         )
+        results['_meta'] = {
+            'feature_names':     list(X_train_red.columns),
+            'label_names':       list(y_train.columns),
+            'job_ids':           sorted(df['job_id'].unique().tolist()),
+            'train_idx':         list(X_train_red.index),
+            'test_idx':          list(X_test_red.index),
+            'random_state':      args.random_state,
+            'git_hash':          git_hash,
+            'feature_selection': args.feature_selection,
+        }
         with open(pkl_path, 'wb') as fh:
             pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"\nReduced nested-CV results saved → {pkl_path}")
 
     # 5. Train final reduced models
     print("\n── Training final reduced-feature models ──")
-    for reg_name in results:
+    for reg_name in (k for k in results if k != '_meta'):
         results[reg_name]['final_model'] = train_final_model(
             reg_name, results[reg_name],
             X_train_red, y_train, X_test_red, y_test,

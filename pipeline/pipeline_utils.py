@@ -82,6 +82,7 @@ def load_features(data_dir: str, job_ids: list = None) -> pd.DataFrame:
         no matching files are found.
     """
     if job_ids:
+        job_ids = sorted(job_ids)
         paths = [os.path.join(data_dir, f'features-{jid}.pkl') for jid in job_ids]
         missing = [p for p in paths if not os.path.exists(p)]
         if missing:

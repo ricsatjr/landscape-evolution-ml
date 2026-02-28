@@ -108,7 +108,7 @@ def evaluate_final_models(
     scatter_kw = dict(alpha=0.2, lw=0, marker='o', ms=2)
     fs_ax = 7
 
-    for model_idx, reg_name in enumerate(results):
+    for model_idx, reg_name in enumerate(k for k in results if k != '_meta'):
         print(f"\nFinal model: {reg_name}")
 
         results[reg_name]['final_model'] = train_final_model(
@@ -213,7 +213,7 @@ def plot_nested_cv_results(
     box : bool — True → box plots, False → scatter + mean marker
     """
     fw   = figure_width_cm / 2.54
-    col0 = list(results.keys())
+    col0 = [k for k in results.keys() if k != '_meta']
     col1 = ['r2', 'rmse', 'mae']
     col1_labels = [r'$R^2$', r'$RMSE$', r'$MAE$']
     col2 = list(range(len(y.columns))) + ['mean']
@@ -364,6 +364,15 @@ def main():
             random_state=args.random_state,
             n_iter=args.n_iter,
         )
+        results['_meta'] = {
+            'feature_names': list(X_train.columns),
+            'label_names':   list(y_train.columns),
+            'job_ids':       sorted(df['job_id'].unique().tolist()),
+            'train_idx':     list(X_train.index),
+            'test_idx':      list(X_test.index),
+            'random_state':  args.random_state,
+            'git_hash':      git_hash,
+        }
         with open(pkl_path, 'wb') as fh:
             pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"\nNested-CV results saved → {pkl_path}")
@@ -386,6 +395,8 @@ def main():
     # Summary table
     print("\n── Final model test-set performance ──")
     for reg_name, reg_res in results.items():
+        if reg_name == '_meta':
+            continue
         fm = reg_res.get('final_model', {})
         if fm:
             r2_mean = fm['test_set_r2'][-1]

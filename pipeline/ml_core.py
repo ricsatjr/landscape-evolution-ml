@@ -245,6 +245,11 @@ def nested_cv(
         outer_cv = ShuffleSplit(
             n_splits=n_outer_splits, test_size=0.2, random_state=random_state
         )
+        # TODO: use random_state + 1 for inner_cv to ensure outer and inner
+        # splits are independently randomised. Currently both use the same
+        # random_state, which introduces correlation between fold assignments.
+        # Changing this will alter CV fold assignments and produce different
+        # (though not necessarily worse) results — defer to v2 retraining.
         inner_cv = ShuffleSplit(
             n_splits=n_inner_splits, test_size=0.2, random_state=random_state
         )
