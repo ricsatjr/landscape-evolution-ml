@@ -858,6 +858,11 @@ def run_stage2_features(data_dir, output_dir, job_id):
         out_file = output_dir / 'features-all.pkl'
     else:
         rasnet_files = sorted(data_dir.glob(f'rasnet-n*-{job_id}-*-*.pkl'))
+            # Note: if multiple elev_err values are used, the glob pattern will match
+            # all rasnet files for a given job_id regardless of noise level, producing
+            # multiple rows per landscape in the output DataFrame. In that case, add
+            # --elev-err as a CLI argument and filter rasnet files accordingly.
+            # For the current dataset (elev_err=10m throughout), this is not an issue.
         out_file = output_dir / f'features-{job_id}.pkl'
 
     if not rasnet_files:
