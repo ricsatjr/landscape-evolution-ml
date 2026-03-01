@@ -432,9 +432,14 @@ def analyze_feature_importance(
     fig.savefig(stem + '.svg')
     plt.close(fig)
 
-    # Aggregate: median rank across models
-    feat_imp_df['median_rank'] = feat_imp_df.median(axis=1)
-    feat_imp_df = np.round(feat_imp_df.sort_values('median_rank'), 1)
+    # Aggregate: median rank and std of ranks across models
+    rank_cols = [c for c in feat_imp_df.columns
+                 if c not in ('median_rank', 'related features')]
+    feat_imp_df['median_rank'] = feat_imp_df[rank_cols].median(axis=1)
+    feat_imp_df['rank_std']    = feat_imp_df[rank_cols].std(axis=1)
+    feat_imp_df = np.round(
+        feat_imp_df.sort_values(['median_rank', 'rank_std']), 1
+    )
 
     # Annotate with cluster companions
     for rfeat in feat_imp_df.index:
@@ -707,7 +712,7 @@ def main():
     )
 
     print("\n── Feature importance (median rank) ──")
-    print(feat_imp_df[['median_rank', 'related features']].to_string())
+    print(feat_imp_df[['median_rank', 'rank_std', 'related features']].to_string())
 
     # 9. Top-feature scatter plots
     plt.close('all')
