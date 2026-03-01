@@ -360,7 +360,7 @@ def compute_permutation_importance(
 
     ax.set_yticks(np.arange(len(X.columns)))
     ax.set_yticklabels(
-        [_feature_label(X.columns[i]) for i in sorted_idx], fontsize=7
+        [X.columns[i] for i in sorted_idx], fontsize=7
     )
 
     return ax, result.importances_mean
