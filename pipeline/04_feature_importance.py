@@ -580,9 +580,23 @@ def main():
         print("\nStandalone mode: using CLI parameters.")
 
     # 2. Load data
-    # In paired mode, job_ids are inherited from _meta to ensure identical data
-    job_ids = meta.get('job_ids', args.job_ids)
-    df = load_features(args.data_dir, job_ids=job_ids)
+    # In paired mode, load all available feature files from --data-dir
+    # without filtering by job_ids — the user is responsible for pointing
+    # --data-dir to the same data used in 03. Job IDs are verified below.
+    df = load_features(args.data_dir, job_ids=args.job_ids)
+
+    # In paired mode, verify loaded job_ids match _meta
+    if meta.get('job_ids'):
+        loaded_job_ids   = sorted(df['job_id'].unique().tolist())
+        expected_job_ids = meta['job_ids']
+        if loaded_job_ids != expected_job_ids:
+            raise ValueError(
+                f"Loaded data does not match full-feature results.\n"
+                f"  Expected {len(expected_job_ids)} jobs from _meta\n"
+                f"  Loaded   {len(loaded_job_ids)} jobs from {args.data_dir}\n"
+                f"  Check that --data-dir points to the same feature files "
+                f"used in 03."
+            )
 
     # In paired mode, labels are inherited from _meta
     label_names = meta.get('label_names', args.labels)
