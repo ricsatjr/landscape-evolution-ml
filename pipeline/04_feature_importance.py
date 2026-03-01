@@ -559,34 +559,71 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     git_hash = _git_hash()
 
-    # 1. Load data
-    df = load_features(args.data_dir, job_ids=args.job_ids)
-    X, y = split_features_labels(df, args.labels)
+    # 1. Load full-feature results pickle if provided (paired mode)
+    full_results = None
+    if args.full_results_pkl:
+        if not os.path.exists(args.full_results_pkl):
+            raise FileNotFoundError(
+                f"--full-results-pkl not found: {args.full_results_pkl}"
+            )
+        with open(args.full_results_pkl, 'rb') as fh:
+            full_results = pickle.load(fh)
+        meta = full_results.get('_meta', {})
+        print(f"\nPaired mode: inheriting parameters from {args.full_results_pkl}")
+        print(f"  labels       : {meta.get('label_names')}")
+        print(f"  job_ids      : {len(meta.get('job_ids', []))} jobs")
+        print(f"  random_state : {meta.get('random_state')}")
+        print(f"  train/test   : {len(meta.get('train_idx', []))}"
+              f" / {len(meta.get('test_idx', []))}")
+    else:
+        meta = {}
+        print("\nStandalone mode: using CLI parameters.")
+
+    # 2. Load data
+    # In paired mode, job_ids are inherited from _meta to ensure identical data
+    job_ids = meta.get('job_ids', args.job_ids)
+    df = load_features(args.data_dir, job_ids=job_ids)
+
+    # In paired mode, labels are inherited from _meta
+    label_names = meta.get('label_names', args.labels)
+    X, y = split_features_labels(df, label_names)
     all_features = list(X.columns)
     print(f"\nFeatures : {len(all_features)} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
 
-    # 2. Train / test split
-    n_test  = max(1, int(len(df) * args.test_fraction))
-    n_train = len(df) - n_test
-    X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
-    y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
+    # 3. Train / test split
+    # In paired mode, inherit exact split indices from _meta
+    if meta.get('train_idx') and meta.get('test_idx'):
+        train_idx = meta['train_idx']
+        test_idx  = meta['test_idx']
+        X_train = X.loc[train_idx]
+        X_test  = X.loc[test_idx]
+        y_train = y.loc[train_idx]
+        y_test  = y.loc[test_idx]
+    else:
+        n_test  = max(1, int(len(df) * args.test_fraction))
+        n_train = len(df) - n_test
+        X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
+        y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
 
-    # 3. Feature clustering
+    # In paired mode, random_state is inherited from _meta
+    random_state = meta.get('random_state', args.random_state)
+
+    # 4. Feature clustering
     reduced_features, cluster_id_to_feature_ids = get_feature_clusters(
         X_train,
         dist_thresh=args.dist_thresh,
         output_dir=args.output_dir,
         git_hash=git_hash,
         feature_selection=args.feature_selection,
-        random_state=args.random_state,
+        random_state=random_state,
     )
 
     X_train_red = X_train[reduced_features]
     X_test_red  = X_test[reduced_features]
 
-    # 4. Nested CV on reduced features
+    # 5. Nested CV on reduced features
     pkl_path = args.results_pkl or os.path.join(
         args.output_dir, f'nested-cv-results-reduced-{git_hash}.pkl'
     )
@@ -600,7 +637,7 @@ def main():
             X_train_red, y_train,
             n_outer_splits=args.n_outer,
             n_inner_splits=args.n_inner,
-            random_state=args.random_state,
+            random_state=random_state,
             n_iter=args.n_iter,
         )
         results['_meta'] = {
@@ -609,15 +646,16 @@ def main():
             'job_ids':           sorted(df['job_id'].unique().tolist()),
             'train_idx':         list(X_train_red.index),
             'test_idx':          list(X_test_red.index),
-            'random_state':      args.random_state,
+            'random_state':      random_state,
             'git_hash':          git_hash,
             'feature_selection': args.feature_selection,
+            'paired_with':       args.full_results_pkl,
         }
         with open(pkl_path, 'wb') as fh:
             pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
         print(f"\nReduced nested-CV results saved → {pkl_path}")
 
-    # 5. Train final reduced models
+    # 6. Train final reduced models
     print("\n── Training final reduced-feature models ──")
     for reg_name in (k for k in results if k != '_meta'):
         results[reg_name]['final_model'] = train_final_model(
@@ -629,23 +667,17 @@ def main():
         pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
     print(f"Updated reduced results saved → {pkl_path}")
 
-    # 6. Full vs reduced comparison (optional)
-    if args.full_results_pkl:
-        if not os.path.exists(args.full_results_pkl):
-            print(f"\nWarning: --full-results-pkl not found: {args.full_results_pkl}")
-            print("Skipping full-vs-reduced comparison.")
-        else:
-            with open(args.full_results_pkl, 'rb') as fh:
-                full_results = pickle.load(fh)
-            plt.close('all')
-            compare_full_vs_reduced(
-                full_results, results, args.labels,
-                args.output_dir, git_hash,
-            )
+    # 7. Full vs reduced comparison (paired mode only)
+    if full_results is not None:
+        plt.close('all')
+        compare_full_vs_reduced(
+            full_results, results, label_names,
+            args.output_dir, git_hash,
+        )
     else:
-        print("\nNo --full-results-pkl provided; skipping full-vs-reduced comparison.")
+        print("\nStandalone mode: skipping full-vs-reduced comparison.")
 
-    # 7. Permutation importance
+    # 8. Permutation importance
     plt.close('all')
     feat_imp_df = analyze_feature_importance(
         results,
@@ -657,13 +689,13 @@ def main():
         output_dir=args.output_dir,
         git_hash=git_hash,
         n_repeats=args.n_repeats,
-        random_state=args.random_state,
+        random_state=random_state,
     )
 
     print("\n── Feature importance (median rank) ──")
     print(feat_imp_df[['median_rank', 'related features']].to_string())
 
-    # 8. Top-feature scatter plots
+    # 9. Top-feature scatter plots
     plt.close('all')
     plot_top_features_vs_targets(
         X_train_red, y_train, feat_imp_df,
