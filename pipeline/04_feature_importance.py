@@ -502,7 +502,7 @@ def plot_top_features_vs_targets(
                     f'log {_target_label(label)}', fontsize=8
                 )
             if t == len(labels) - 1:
-                ax[t, f].set_xlabel(_feature_label(feat), fontsize=8)
+                ax[t, f].set_xlabel(feat, fontsize=8)
             else:
                 ax[t, f].set_xticklabels([])
 
