@@ -48,6 +48,11 @@ import os
 import pickle
 from collections import defaultdict
 
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend — required when permutation
+                       # importance runs parallel workers (n_jobs=-1); tkinter
+                       # crashes if figure objects are garbage-collected from
+                       # worker threads rather than the main thread.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd

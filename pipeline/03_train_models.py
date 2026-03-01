@@ -38,6 +38,9 @@ import argparse
 import os
 import pickle
 
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend — prevents tkinter threading
+                       # crashes when parallel CV workers are active.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
