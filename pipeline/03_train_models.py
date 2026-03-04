@@ -314,7 +314,7 @@ def parse_args():
                    help='Restrict to specific job IDs.')
     p.add_argument('--labels',       nargs='+', default=['u_ks', 'kh_ks'],
                    help='Target columns (log₁₀-transformed at training time).')
-    p.add_argument('--test-fraction', type=float, default=0.1,
+    p.add_argument('--test-fraction', type=float, default=0.2106,  #0.2106 produces 200 samples for test set from 950 total samples 
                    help='Fraction of data held out as the final test set.')
     p.add_argument('--n-outer',      type=int, default=10)
     p.add_argument('--n-inner',      type=int, default=5)
