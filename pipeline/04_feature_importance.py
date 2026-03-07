@@ -540,6 +540,11 @@ def parse_args():
     p.add_argument('--test-fraction', type=float, default=0.1)
     p.add_argument('--dist-thresh',   type=float, default=0.25,
                    help='Spearman distance threshold for feature clustering.')
+    p.add_argument('--features-hash', default=None,
+                   help='Git hash suffix of feature pkl files to load. '
+                        'Inherited from --full-results-pkl _meta in paired '
+                        'mode; required here only in standalone mode if '
+                        'multiple hashed versions exist in --data-dir.')
     p.add_argument('--feature-selection', choices=['domain', 'random'],
                    default='domain',
                    help=(
@@ -597,7 +602,8 @@ def main():
     # In paired mode, load all available feature files from --data-dir
     # without filtering by job_ids — the user is responsible for pointing
     # --data-dir to the same data used in 03. Job IDs are verified below.
-    df = load_features(args.data_dir, job_ids=args.job_ids)
+    df = load_features(args.data_dir, job_ids=args.job_ids,
+                       features_hash=meta.get('features_hash', args.features_hash))
 
     # In paired mode, verify loaded job_ids match _meta
     if meta.get('job_ids'):
@@ -641,6 +647,9 @@ def main():
     # label_tag: derived from _meta in paired mode, from CLI in standalone mode
     # Used consistently in all output filenames for this run.
     label_tag = '-'.join(meta.get('label_names', args.labels))
+
+    # features_hash: inherited from _meta in paired mode, from CLI in standalone
+    features_hash = meta.get('features_hash', args.features_hash)
 
     # 4. Feature clustering
     reduced_features, cluster_id_to_feature_ids = get_feature_clusters(

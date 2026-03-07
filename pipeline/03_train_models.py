@@ -316,6 +316,10 @@ def parse_args():
                    help='Restrict to specific job IDs.')
     p.add_argument('--labels',       nargs='+', default=['u_ks', 'kh_ks'],
                    help='Target columns (log₁₀-transformed at training time).')
+    p.add_argument('--features-hash', default=None,
+                   help='Git hash suffix of feature pkl files to load '
+                        '(e.g. abc1234). Required if multiple hashed versions '
+                        'exist in --data-dir.')
     p.add_argument('--test-fraction', type=float, default=0.2106,  #0.2106 produces 200 samples for test set from 950 total samples 
                    help='Fraction of data held out as the final test set.')
     p.add_argument('--n-outer',      type=int, default=10)
@@ -340,7 +344,8 @@ def main():
     git_hash = _git_hash()
 
     # 1. Load data
-    df = load_features(args.data_dir, job_ids=args.job_ids)
+    df = load_features(args.data_dir, job_ids=args.job_ids,
+                       features_hash=args.features_hash)
     X, y = split_features_labels(df, args.labels)
     print(f"\nFeatures : {X.shape[1]} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
@@ -380,13 +385,14 @@ def main():
             n_iter=args.n_iter,
         )
         results['_meta'] = {
-            'feature_names': list(X_train.columns),
-            'label_names':   list(y_train.columns),
-            'job_ids':       sorted(df['job_id'].unique().tolist()),
-            'train_idx':     list(X_train.index),
-            'test_idx':      list(X_test.index),
-            'random_state':  args.random_state,
-            'git_hash':      git_hash,
+            'feature_names':  list(X_train.columns),
+            'label_names':    list(y_train.columns),
+            'job_ids':        sorted(df['job_id'].unique().tolist()),
+            'train_idx':      list(X_train.index),
+            'test_idx':       list(X_test.index),
+            'random_state':   args.random_state,
+            'git_hash':       git_hash,
+            'features_hash':  args.features_hash,
         }
         with open(pkl_path, 'wb') as fh:
             pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)

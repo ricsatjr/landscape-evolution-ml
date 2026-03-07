@@ -58,8 +58,9 @@ def _git_hash(short: bool = True) -> str:
 # Data loading
 # =============================================================================
 
-def load_features(data_dir: str, job_ids: list = None) -> pd.DataFrame:
-    """Load and concatenate ``features-{job_id}.pkl`` files.
+def load_features(data_dir: str, job_ids: list = None,
+                  features_hash: str = None) -> pd.DataFrame:
+    """Load and concatenate ``features-{job_id}-{hash}.pkl`` files.
 
     Parameters
     ----------
@@ -69,6 +70,10 @@ def load_features(data_dir: str, job_ids: list = None) -> pd.DataFrame:
     job_ids : list of int or str, optional
         If given, load only the specified job IDs.  Otherwise all files
         matching ``features-*.pkl`` in ``data_dir`` are loaded.
+    features_hash : str, optional
+        Git hash suffix of the feature files to load (e.g. ``'abc1234'``).
+        If None, the directory is scanned for a unique hash; a clear error
+        is raised if multiple hashes are found.
 
     Returns
     -------
@@ -80,19 +85,52 @@ def load_features(data_dir: str, job_ids: list = None) -> pd.DataFrame:
     FileNotFoundError
         If specific job IDs are requested but their files are missing, or if
         no matching files are found.
+    ValueError
+        If ``features_hash`` is not specified and multiple hash versions are
+        found in ``data_dir``.
     """
+    def _file_hash(path):
+        """Extract trailing hash from features-{job_id}-{hash}.pkl."""
+        stem = os.path.basename(path)[len('features-'):-len('.pkl')]
+        return stem.rsplit('-', 1)[-1]
+
     if job_ids:
         job_ids = sorted(job_ids)
-        paths = [os.path.join(data_dir, f'features-{jid}.pkl') for jid in job_ids]
+        if features_hash:
+            paths = [
+                os.path.join(data_dir, f'features-{jid}-{features_hash}.pkl')
+                for jid in job_ids
+            ]
+        else:
+            # Find files for each job_id and check for unique hash
+            paths = []
+            for jid in job_ids:
+                matches = sorted(glob.glob(
+                    os.path.join(data_dir, f'features-{jid}-*.pkl')
+                ))
+                paths.extend(matches)
         missing = [p for p in paths if not os.path.exists(p)]
         if missing:
             raise FileNotFoundError(f"Feature files not found: {missing}")
     else:
-        pattern = os.path.join(data_dir, 'features-*.pkl')
+        if features_hash:
+            pattern = os.path.join(data_dir, f'features-*-{features_hash}.pkl')
+        else:
+            pattern = os.path.join(data_dir, 'features-*.pkl')
         paths = sorted(glob.glob(pattern))
         if not paths:
             raise FileNotFoundError(
                 f"No feature files found matching '{pattern}'"
+            )
+
+    # If no hash was specified, verify all matched files share the same hash
+    if not features_hash:
+        hashes = sorted(set(_file_hash(p) for p in paths))
+        if len(hashes) > 1:
+            raise ValueError(
+                f"Multiple feature file versions found in '{data_dir}':\n"
+                f"  hashes: {hashes}\n"
+                f"  Specify --features-hash to select one explicitly."
             )
 
     dfs = []
