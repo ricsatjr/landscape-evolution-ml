@@ -115,6 +115,7 @@ def get_feature_clusters(
     dist_thresh: float = 0.25,
     output_dir: str = 'outputs',
     git_hash: str = 'latest',
+    label_tag: str = '',
     feature_selection: str = 'domain',
     random_state: int = 42,
 ) -> tuple:
@@ -197,7 +198,7 @@ def get_feature_clusters(
     ax.tick_params(axis='both', labelsize=8)
 
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'feature-clustering-{git_hash}')
+    stem = os.path.join(output_dir, f'feature-clustering-{label_tag}-{git_hash}')
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
     plt.close(fig)
@@ -215,6 +216,7 @@ def compare_full_vs_reduced(
     y_labels:     list,
     output_dir:   str,
     git_hash:     str,
+    label_tag:    str = '',
     figure_width_cm: float = 12.0,
 ) -> None:
     """Compare generalisation performance of full- and reduced-feature models.
@@ -291,7 +293,7 @@ def compare_full_vs_reduced(
                 ax.set_ylabel(metric_label, fontsize=8)
 
         fig.tight_layout()
-        stem = os.path.join(output_dir, f'full-vs-reduced-{metric}-{git_hash}')
+        stem = os.path.join(output_dir, f'full-vs-reduced-{metric}-{label_tag}-{git_hash}')
         fig.savefig(stem + '.png', dpi=300)
         fig.savefig(stem + '.svg')
         plt.close(fig)
@@ -375,6 +377,7 @@ def analyze_feature_importance(
     y_test: pd.DataFrame,
     output_dir: str,
     git_hash: str,
+    label_tag: str = '',
     n_repeats: int = 10,
     random_state: int = 42,
     box: bool = False,
@@ -432,7 +435,7 @@ def analyze_feature_importance(
 
     fig.supxlabel(r'feature importance ($R^2 - R^2_\mathrm{perm}$)', fontsize=10)
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'feature-importance-{git_hash}')
+    stem = os.path.join(output_dir, f'feature-importance-{label_tag}-{git_hash}')
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
     plt.close(fig)
@@ -455,7 +458,7 @@ def analyze_feature_importance(
                 feat_imp_df.loc[rfeat, 'related features'] = ', '.join(companions)
 
     feat_imp_df.to_csv(
-        os.path.join(output_dir, f'feature-importance-{git_hash}.csv')
+        os.path.join(output_dir, f'feature-importance-{label_tag}-{git_hash}.csv')
     )
     return feat_imp_df
 
@@ -471,6 +474,7 @@ def plot_top_features_vs_targets(
     top_n: int = 5,
     output_dir: str = 'outputs',
     git_hash: str = 'latest',
+    label_tag: str = '',
     figure_width_cm: float = 19.0,
 ):
     """Scatter plots of the top-N features against each target.
@@ -512,7 +516,7 @@ def plot_top_features_vs_targets(
                 ax[t, f].set_xticklabels([])
 
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'top-features-vs-targets-{git_hash}')
+    stem = os.path.join(output_dir, f'top-features-vs-targets-{label_tag}-{git_hash}')
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
     plt.close(fig)
@@ -634,12 +638,17 @@ def main():
     # In paired mode, random_state is inherited from _meta
     random_state = meta.get('random_state', args.random_state)
 
+    # label_tag: derived from _meta in paired mode, from CLI in standalone mode
+    # Used consistently in all output filenames for this run.
+    label_tag = '-'.join(meta.get('label_names', args.labels))
+
     # 4. Feature clustering
     reduced_features, cluster_id_to_feature_ids = get_feature_clusters(
         X_train,
         dist_thresh=args.dist_thresh,
         output_dir=args.output_dir,
         git_hash=git_hash,
+        label_tag=label_tag,
         feature_selection=args.feature_selection,
         random_state=random_state,
     )
@@ -649,13 +658,21 @@ def main():
 
     # 5. Nested CV on reduced features
     pkl_path = args.results_pkl or os.path.join(
-        args.output_dir, f'nested-cv-results-reduced-{git_hash}.pkl'
+        args.output_dir, f'nested-cv-results-reduced-{label_tag}-{git_hash}.pkl'
     )
 
     if args.skip_cv and os.path.exists(pkl_path):
         print(f"\nLoading existing reduced results from {pkl_path}")
         with open(pkl_path, 'rb') as fh:
             results = pickle.load(fh)
+        pkl_labels = results.get('_meta', {}).get('label_names', [])
+        if pkl_labels and pkl_labels != list(label_names):
+            raise ValueError(
+                f"Label mismatch between --results-pkl and active label set.\n"
+                f"  pkl  : {pkl_labels}\n"
+                f"  active: {list(label_names)}\n"
+                f"  Check that --results-pkl corresponds to the intended labels."
+            )
     else:
         results = nested_cv(
             X_train_red, y_train,
@@ -696,7 +713,7 @@ def main():
         plt.close('all')
         compare_full_vs_reduced(
             full_results, results, label_names,
-            args.output_dir, git_hash,
+            args.output_dir, git_hash, label_tag,
         )
     else:
         print("\nStandalone mode: skipping full-vs-reduced comparison.")
@@ -712,6 +729,7 @@ def main():
         y_test=y_test,
         output_dir=args.output_dir,
         git_hash=git_hash,
+        label_tag=label_tag,
         n_repeats=args.n_repeats,
         random_state=random_state,
     )
@@ -726,6 +744,7 @@ def main():
         top_n=args.top_n,
         output_dir=args.output_dir,
         git_hash=git_hash,
+        label_tag=label_tag,
     )
 
 

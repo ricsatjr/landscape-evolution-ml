@@ -31,7 +31,7 @@ Usage
     python 03_train_models.py --labels u kh ks
 
     # Skip nested CV; re-run final-model and plots from an existing pickle
-    python 03_train_models.py --skip-cv --results-pkl outputs/nested-cv-results-full-abc1234.pkl
+    python 03_train_models.py --skip-cv --results-pkl outputs/nested-cv-results-full-u_ks-kh_ks-abc1234.pkl --labels u_ks kh_ks
 """
 
 import argparse
@@ -72,6 +72,7 @@ def evaluate_final_models(
     results: dict,
     output_dir: str,
     git_hash: str,
+    label_tag: str,
     figure_width_cm: float = 14.0,
 ) -> dict:
     """Train final models and produce predicted-vs-true figures.
@@ -176,7 +177,7 @@ def evaluate_final_models(
                         va='bottom', ha='right', transform=cur_ax.transAxes)
 
         fig_m.tight_layout()
-        stem = os.path.join(output_dir, f'pred_vs_true-{reg_name}-{git_hash}')
+        stem = os.path.join(output_dir, f'pred_vs_true-{reg_name}-{label_tag}-{git_hash}')
         fig_m.savefig(stem + '.png', dpi=300)
         fig_m.savefig(stem + '.svg')
         plt.close(fig_m)
@@ -184,7 +185,7 @@ def evaluate_final_models(
     for col in labels:
         fig = fig_per_target[col]
         fig.tight_layout()
-        stem = os.path.join(output_dir, f'pred_vs_true-all_models-{col}-{git_hash}')
+        stem = os.path.join(output_dir, f'pred_vs_true-all_models-{col}-{label_tag}-{git_hash}')
         fig.savefig(stem + '.png', dpi=300)
         fig.savefig(stem + '.svg')
         plt.close(fig)
@@ -201,6 +202,7 @@ def plot_nested_cv_results(
     y: pd.DataFrame,
     output_dir: str,
     git_hash: str,
+    label_tag: str,
     figure_width_cm: float = 14.0,
     box: bool = True,
 ):
@@ -290,7 +292,7 @@ def plot_nested_cv_results(
 
         suffix = '-box' if box else ''
         stem = os.path.join(
-            output_dir, f'nested-cv-performance-full-{c1}{suffix}-{git_hash}'
+            output_dir, f'nested-cv-performance-full-{c1}{suffix}-{label_tag}-{git_hash}'
         )
         fig.savefig(stem + '.png', dpi=300)
         fig.savefig(stem + '.svg')
@@ -351,14 +353,24 @@ def main():
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
 
     # 3. Nested CV
-    pkl_path = args.results_pkl or os.path.join(
-        args.output_dir, f'nested-cv-results-full-{git_hash}.pkl'
+    label_tag = '-'.join(args.labels)
+    pkl_path  = args.results_pkl or os.path.join(
+        args.output_dir, f'nested-cv-results-full-{label_tag}-{git_hash}.pkl'
     )
 
     if args.skip_cv and os.path.exists(pkl_path):
         print(f"\nLoading existing results from {pkl_path}")
         with open(pkl_path, 'rb') as fh:
             results = pickle.load(fh)
+        # Validate that the pkl was trained on the same labels
+        pkl_labels = results.get('_meta', {}).get('label_names', [])
+        if pkl_labels and pkl_labels != args.labels:
+            raise ValueError(
+                f"Label mismatch between --results-pkl and --labels.\n"
+                f"  pkl  : {pkl_labels}\n"
+                f"  CLI  : {args.labels}\n"
+                f"  Check that --results-pkl corresponds to the intended labels."
+            )
     else:
         results = nested_cv(
             X_train, y_train,
@@ -382,14 +394,14 @@ def main():
 
     # 4. Plot CV results
     plt.close('all')
-    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, box=False)
-    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, box=True)
+    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, label_tag, box=False)
+    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, label_tag, box=True)
 
     # 5. Train final models; evaluate on held-out test set
     plt.close('all')
     results = evaluate_final_models(
         X_train, y_train, X_test, y_test,
-        results, args.output_dir, git_hash,
+        results, args.output_dir, git_hash, label_tag,
     )
     with open(pkl_path, 'wb') as fh:
         pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)

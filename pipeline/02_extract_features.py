@@ -119,6 +119,8 @@ from landlab.components import (
 )
 from landlab.utils.watershed import get_watershed_masks
 
+from pipeline_utils import _git_hash
+
 
 # =============================================================================
 # FIXED CONSTANTS
@@ -874,7 +876,7 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
 # STAGE 2 MAIN: COMPUTE AND SAVE FEATURE DATAFRAMES
 # =============================================================================
 
-def run_stage2_features(data_dir, output_dir, job_id):
+def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest'):
     """
     Stage 2: Load rasnet files and compute the full 39-feature vector for
     each landscape. Save label-feature DataFrames as .pkl files.
@@ -906,7 +908,7 @@ def run_stage2_features(data_dir, output_dir, job_id):
     # Locate rasnet files
     if str(job_id) == 'all':
         rasnet_files = sorted(data_dir.glob('rasnet-*.pkl'))
-        out_file = output_dir / 'features-all.pkl'
+        out_file = output_dir / f'features-all-{git_hash}.pkl'
     else:
         rasnet_files = sorted(data_dir.glob(f'rasnet-n*-{job_id}-*-*.pkl'))
             # Note: if multiple elev_err values are used, the glob pattern will match
@@ -914,7 +916,7 @@ def run_stage2_features(data_dir, output_dir, job_id):
             # multiple rows per landscape in the output DataFrame. In that case, add
             # --elev-err as a CLI argument and filter rasnet files accordingly.
             # For the current dataset (elev_err=10m throughout), this is not an issue.
-        out_file = output_dir / f'features-{job_id}.pkl'
+        out_file = output_dir / f'features-{job_id}-{git_hash}.pkl'
 
     if not rasnet_files:
         raise FileNotFoundError(
@@ -1014,6 +1016,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    git_hash = _git_hash()
     job_id = args.job_id if args.job_id == 'all' else int(args.job_id)
     rasnet_dir = args.rasnet_dir if args.rasnet_dir else (
         args.output_dir if args.stage == 'all' else args.data_dir
@@ -1033,4 +1036,5 @@ if __name__ == "__main__":
             data_dir=rasnet_dir,
             output_dir=args.output_dir,
             job_id=job_id,
+            git_hash=git_hash,
         )
