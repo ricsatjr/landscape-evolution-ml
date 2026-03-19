@@ -1,6 +1,6 @@
 # landscape-evolution-ml
 
-**A machine learning pipeline for estimating landscape evolution parameters from topography**
+**Numerical modeling and machine learning pipeline for parameter estimation, hypothesis testing, and discovery in landscape evolution**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
