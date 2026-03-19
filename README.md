@@ -2,7 +2,7 @@
 
 **A machine learning pipeline for estimating landscape evolution parameters from topography**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Landlab 2.9.2](https://img.shields.io/badge/landlab-2.9.2-green.svg)](https://landlab.readthedocs.io/)
 [![scikit-learn 1.6.1](https://img.shields.io/badge/scikit--learn-1.6.1-orange.svg)](https://scikit-learn.org/)
