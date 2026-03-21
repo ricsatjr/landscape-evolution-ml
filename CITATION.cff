@@ -5,7 +5,7 @@ authors:
   given-names: "Ricarido, Jr."
   orcid: "https://orcid.org/0000-0002-2878-544X"
 title: "landscape-evolution-ml"
-version: 1.0.0
-doi: 
+version: 1.0.1
+doi: https://doi.org/10.5281/zenodo.19110960
 date-released: 2026-03-19
 url: "https://github.com/ricsatjr/landscape-evolution-ml"
