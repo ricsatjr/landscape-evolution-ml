@@ -60,7 +60,14 @@ Arguments
                     (default: current directory)
     --elev-err      Elevation measurement error magnitude in meters (default: 10)
     --ts-index      Time step index to extract from elevation time series
-                    (default: 99, i.e., the final steady-state snapshot)
+                    (default: 99, i.e., the final steady-state snapshot).
+                    Ignored when --transient-map is provided.
+    --transient-map Path to transient_map.csv produced by
+                    01b_select_transient_snapshots.py. When provided, each
+                    landscape uses its own selected_ts_index rather than a
+                    uniform --ts-index. Both Stage 1 and Stage 2 use the map
+                    to construct exact rasnet filenames, preventing accidental
+                    mixing of transient and steady-state files.
 
 Output (Stage 1)
 ----------------
@@ -796,13 +803,14 @@ def _convert_legacy_rasnet_params(le_params: dict) -> dict:
 # =============================================================================
 
 def run_stage1_rasnet(data_dir, output_dir, job_id,
-                      elev_err=ELEV_ERR, ts_index=TS_INDEX):
+                      elev_err=ELEV_ERR, ts_index=TS_INDEX,
+                      transient_map=None):
     """
     Stage 1: Load elevation grids, run flow routing, build drainage networks,
     and save intermediate rasnet pickle files.
 
     For each landscape in the job's parameter file, this function:
-      1. Locates the steady-state elevation grid (.npy at ts_index)
+      1. Locates the elevation grid (.npy) at the appropriate ts_index
       2. Loads it into a Landlab grid with measurement noise added
       3. Runs D8 flow routing and extracts the drainage network
       4. Saves [le_params, mg, mask, chNet, wsOutlets, wsOutletsDA] to .pkl
@@ -818,7 +826,13 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
     elev_err : float
         Elevation noise magnitude (m). Default: ELEV_ERR (10 m).
     ts_index : int
-        Time step index of elevation snapshot. Default: TS_INDEX (99).
+        Time step index of elevation snapshot used for all landscapes when
+        transient_map is None. Default: TS_INDEX (99).
+    transient_map : pd.DataFrame or None
+        Transient snapshot lookup table from 01b_select_transient_snapshots.py,
+        pre-filtered to the current job_id. When provided, each landscape uses
+        its own selected_ts_index from the map. When None, ts_index is used
+        for all landscapes.
     """
     data_dir   = Path(data_dir)
     output_dir = Path(output_dir)
@@ -829,20 +843,32 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
         raise FileNotFoundError(f"Parameter file not found: {param_file}")
 
     param_df = pd.read_pickle(param_file)
+
+    # Build per-landscape ts_index lookup
+    if transient_map is not None:
+        ts_lookup = transient_map.set_index('landscape_idx')['selected_ts_index'].to_dict()
+        mode_label = 'transient'
+    else:
+        ts_lookup = None
+        mode_label = f'ts_index={ts_index}'
+
     print(f"Stage 1 | Job {job_id} | {len(param_df)} landscapes | "
-          f"elev_err={elev_err}m | ts_index={ts_index}")
+          f"elev_err={elev_err}m | {mode_label}")
 
     t_start = time.time()
 
     for landscape_idx in param_df.index:
-        npy_file = data_dir / f'elevts-{job_id}-{landscape_idx}-{ts_index}.npy'
+        # Resolve ts_index for this landscape
+        landscape_ts = ts_lookup[landscape_idx] if ts_lookup is not None else ts_index
+
+        npy_file = data_dir / f'elevts-{job_id}-{landscape_idx}-{landscape_ts}.npy'
 
         if not npy_file.exists():
             print(f"  [{landscape_idx}] NOT FOUND: {npy_file.name}")
             continue
 
         # Elevation seed: see make_elev_seed() and DATA_PROVENANCE.md
-        elev_seed = make_elev_seed(job_id, landscape_idx, ts_index)
+        elev_seed = make_elev_seed(job_id, landscape_idx, landscape_ts)
 
         t0 = time.time()
         print(f"  [{landscape_idx:>3d}] {npy_file.name} ...", end='', flush=True)
@@ -860,10 +886,10 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
             'elev_err':      elev_err,
             'job_id':        job_id,
             'landscape_idx': landscape_idx,
-            'ts_index':      ts_index,
+            'ts_index':      landscape_ts,
         }
 
-        out_file = output_dir / f'rasnet-n{int(elev_err)}-{job_id}-{landscape_idx}-{ts_index}.pkl'
+        out_file = output_dir / f'rasnet-n{int(elev_err)}-{job_id}-{landscape_idx}-{landscape_ts}.pkl'
         with open(out_file, 'wb') as f:
             pickle.dump([le_params, mg, mask, chNet, wsOutlets, wsOutletsDA], f)
 
@@ -876,7 +902,8 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
 # STAGE 2 MAIN: COMPUTE AND SAVE FEATURE DATAFRAMES
 # =============================================================================
 
-def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest'):
+def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest',
+                        transient_map=None, ts_index=TS_INDEX):
     """
     Stage 2: Load rasnet files and compute the full 39-feature vector for
     each landscape. Save label-feature DataFrames as .pkl files.
@@ -886,6 +913,10 @@ def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest'):
       2. Computes 28 raster features via compute_raster_features()
       3. Computes 11 network features via compute_network_features()
       4. Combines LE parameter labels + features into a single row
+
+    Rasnet filenames are constructed deterministically from (job_id,
+    landscape_idx, ts_index) rather than resolved by glob, preventing
+    accidental mixing of transient and steady-state files.
 
     The output DataFrame has one row per landscape with columns for:
       - LE parameter labels: u, kh, ks, ly, job_id, landscape_idx, ts_index
@@ -899,37 +930,83 @@ def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest'):
     output_dir : Path
         Directory for output feature DataFrame.
     job_id : int or str
-        Job identifier for filtering rasnet files, or 'all' for all files.
+        Job identifier, or 'all' to process all jobs in transient_map.
+    git_hash : str
+        Git hash string embedded in output filename.
+    transient_map : pd.DataFrame or None
+        Transient snapshot lookup table from 01b_select_transient_snapshots.py.
+        When provided, rasnet filenames are constructed using selected_ts_index
+        per landscape. When None, ts_index is used for all landscapes.
+    ts_index : int
+        Time step index used for all landscapes when transient_map is None.
+        Default: TS_INDEX (99).
     """
     data_dir   = Path(data_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Locate rasnet files
+    # Build (job_id, landscape_idx, ts_index) triplets for rasnet filename construction
+    if transient_map is not None:
+        if str(job_id) == 'all':
+            triplets = [
+                (int(row['job_id']), int(row['landscape_idx']), int(row['selected_ts_index']))
+                for _, row in transient_map.iterrows()
+            ]
+        else:
+            job_map = transient_map[transient_map['job_id'] == job_id]
+            triplets = [
+                (job_id, int(row['landscape_idx']), int(row['selected_ts_index']))
+                for _, row in job_map.iterrows()
+            ]
+    else:
+        # Steady-state
+        if str(job_id) == 'all':
+            # Parse triplets from rasnet filenames — params files are not in
+            # data_dir (rasnet dir), so filename parsing is the only reliable
+            # approach here.
+            # Filename convention: rasnet-n{elev_err}-{job_id}-{landscape_idx}-{ts_index}.pkl
+            rasnet_files = sorted(data_dir.glob('rasnet-*.pkl'))
+            if not rasnet_files:
+                raise FileNotFoundError(
+                    f"No rasnet files found in {data_dir}"
+                )
+            triplets = []
+            for rf in rasnet_files:
+                parts = rf.stem.split('-')
+                # parts: ['rasnet', 'n{elev_err}', job_id, landscape_idx, ts_index]
+                try:
+                    triplets.append((int(parts[2]), int(parts[3]), int(parts[4])))
+                except (IndexError, ValueError):
+                    print(f"  Warning: could not parse triplet from {rf.name}, skipping.")
+        else:
+            param_file = data_dir / f'params-{job_id}.pkl'
+            if not param_file.exists():
+                raise FileNotFoundError(f"Parameter file not found: {param_file}")
+            df_p = pd.read_pickle(param_file)
+            triplets = [(job_id, int(idx), ts_index) for idx in df_p['landscape_idx']]
+
+    # Determine output filename
     if str(job_id) == 'all':
-        rasnet_files = sorted(data_dir.glob('rasnet-*.pkl'))
         out_file = output_dir / f'features-all-{git_hash}.pkl'
     else:
-        rasnet_files = sorted(data_dir.glob(f'rasnet-n*-{job_id}-*-*.pkl'))
-            # Note: if multiple elev_err values are used, the glob pattern will match
-            # all rasnet files for a given job_id regardless of noise level, producing
-            # multiple rows per landscape in the output DataFrame. In that case, add
-            # --elev-err as a CLI argument and filter rasnet files accordingly.
-            # For the current dataset (elev_err=10m throughout), this is not an issue.
         out_file = output_dir / f'features-{job_id}-{git_hash}.pkl'
 
-    if not rasnet_files:
-        raise FileNotFoundError(
-            f"No rasnet files found in {data_dir} for job_id={job_id}"
-        )
+    if not triplets:
+        raise ValueError(f"No landscapes found for job_id={job_id}")
 
-    print(f"Stage 2 | {len(rasnet_files)} rasnet files | output: {out_file.name}")
+    print(f"Stage 2 | {len(triplets)} landscapes | output: {out_file.name}")
 
     all_rows = []
-    t_start = time.time()
+    t_start  = time.time()
 
-    for i, rasnet_file in enumerate(rasnet_files):
-        print(f"  [{i+1}/{len(rasnet_files)}] {rasnet_file.name} ...",
+    for i, (jid, landscape_idx, lts_index) in enumerate(triplets):
+        rasnet_file = data_dir / f'rasnet-n{int(ELEV_ERR)}-{jid}-{landscape_idx}-{lts_index}.pkl'
+
+        if not rasnet_file.exists():
+            print(f"  [{i+1}/{len(triplets)}] NOT FOUND: {rasnet_file.name}")
+            continue
+
+        print(f"  [{i+1}/{len(triplets)}] {rasnet_file.name} ...",
               end='', flush=True)
         t0 = time.time()
 
@@ -1011,7 +1088,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--ts-index', type=int, default=TS_INDEX,
-        help=f"Time step index of elevation snapshot (default: {TS_INDEX})."
+        help=f"Time step index of elevation snapshot (default: {TS_INDEX}). "
+             f"Ignored when --transient-map is provided."
+    )
+    parser.add_argument(
+        '--transient-map', type=str, default=None,
+        help="Path to transient_map.csv from 01b_select_transient_snapshots.py. "
+             "When provided, each landscape uses its own selected_ts_index. "
+             "When absent, --ts-index is used for all landscapes."
     )
 
     args = parser.parse_args()
@@ -1022,6 +1106,18 @@ if __name__ == "__main__":
         args.output_dir if args.stage == 'all' else args.data_dir
     )
 
+    # Load transient map if provided
+    if args.transient_map is not None:
+        transient_map = pd.read_csv(args.transient_map)
+        if job_id != 'all':
+            transient_map = transient_map[transient_map['job_id'] == job_id].reset_index(drop=True)
+        if transient_map.empty:
+            raise ValueError(
+                f"No entries found for job_id={job_id} in {args.transient_map}"
+            )
+    else:
+        transient_map = None
+
     if args.stage in ('rasnet', 'all'):
         run_stage1_rasnet(
             data_dir=args.data_dir,
@@ -1029,6 +1125,7 @@ if __name__ == "__main__":
             job_id=job_id,
             elev_err=args.elev_err,
             ts_index=args.ts_index,
+            transient_map=transient_map,
         )
 
     if args.stage in ('features', 'all'):
@@ -1037,4 +1134,6 @@ if __name__ == "__main__":
             output_dir=args.output_dir,
             job_id=job_id,
             git_hash=git_hash,
+            transient_map=transient_map,
+            ts_index=args.ts_index,
         )
