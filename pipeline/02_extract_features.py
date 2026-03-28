@@ -1119,6 +1119,20 @@ if __name__ == "__main__":
         transient_map = None
 
     if args.stage in ('rasnet', 'all'):
+        if job_id == 'all':
+            job_ids = sorted(transient_map['job_id'].unique())
+            print(f"Processing {len(job_ids)} jobs: {job_ids[:5]}...")
+            for jid in job_ids:
+                jid_map = transient_map[transient_map['job_id'] == jid].reset_index(drop=True)
+                run_stage1_rasnet(
+                    data_dir=args.data_dir,
+                    output_dir=rasnet_dir,
+                    job_id=int(jid),
+                    elev_err=args.elev_err,
+                    ts_index=args.ts_index,
+                    transient_map=jid_map,
+                )
+    else:
         run_stage1_rasnet(
             data_dir=args.data_dir,
             output_dir=rasnet_dir,
