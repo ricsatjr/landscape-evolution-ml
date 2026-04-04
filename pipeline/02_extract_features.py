@@ -701,7 +701,7 @@ def compute_network_features(G, mg):
     return features
 
 
-def _compute_bifurcation_length_ratios(G):
+def _compute_bifurcation_length_ratios(G):  # HORTON-NUMBER-FIX branch will fix this part
     """
     Compute bifurcation and length ratios for the full drainage network.
 
