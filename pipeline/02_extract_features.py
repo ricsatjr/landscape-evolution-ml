@@ -111,6 +111,7 @@ import networkx as nx
 from scipy import ndimage
 import scipy.stats as st
 
+
 from landlab import RasterModelGrid
 from landlab.components import (
     FlowAccumulator,
@@ -701,48 +702,61 @@ def compute_network_features(G, mg):
     return features
 
 
-def _compute_bifurcation_length_ratios(G):  # HORTON-NUMBER-FIX branch will fix this part; initial local commit
+def _compute_bifurcation_length_ratios(G):
     """
-    Compute bifurcation and length ratios for the full drainage network.
-
-    For each stream order o from 0 to max_order-1:
-        Bifurcation ratio: N(o) / N(o+1)  where N = number of edges of order o
-        Length ratio:      L(o) / L(o+1)  where L = total length of edges of order o
-
-    Landscape-level Rb and Rl are geometric means across all orders.
-    Rb0 and Rl0 are the ratios specifically between zero-order and
-    first-order edges, which are the most diagnostic features for Kh/Ks
-    (Section 3.5 in paper).
-
+    Compute bifurcation and length ratios using linear regression.
+    
+    Horton's Law of Stream Numbers: log(Nw) = a - w * log(Rb)
+    Horton's Law of Stream Lengths: log(L_mean_w) = b + w * log(Rl)
+    
     Parameters
     ----------
     G : nx.DiGraph
+        Edges must have 'str_order' and 'length' attributes.
+        Edges are assumed to be individual stream reaches.
 
     Returns
     -------
     Rb, Rl, Rb0, Rl0 : float
-        Bifurcation and length ratios. Returns (nan, nan, nan, nan) if
-        network contains only zero-order edges.
     """
-    max_order = max(G.edges[e]['str_order'] for e in G.edges)
-    if max_order == 0:
+    # 1. Aggregate data by order
+    order_data = {}
+    for _, _, d in G.edges(data=True):
+        o = d['str_order']
+        if o not in order_data:
+            order_data[o] = []
+        order_data[o].append(d['length'])
+
+    orders = sorted(order_data.keys())
+    
+    # Need at least two orders to compute any ratio
+    if len(orders) < 2:
         return np.nan, np.nan, np.nan, np.nan
 
-    N, L = [], []
-    for o in range(max_order + 1):
-        edges_o = [e for e in G.edges if G.edges[e]['str_order'] == o]
-        N.append(len(edges_o))
-        L.append(sum(G.edges[e]['length'] for e in edges_o))
+    # 2. Calculate N (counts) and Mean Length per order
+    N = np.array([len(order_data[o]) for o in orders])
+    L_mean = np.array([np.mean(order_data[o]) for o in orders])
+    omega = np.array(orders)
 
-    Rb_per_order = [N[o] / N[o + 1] for o in range(max_order)]
-    Rl_per_order = [L[o] / L[o + 1] for o in range(max_order)]
+    # 3. Regression for Bifurcation Ratio (Rb)
+    # Equation: ln(N) = Intercept - omega * ln(Rb)
+    # Slope = -ln(Rb)  =>  Rb = exp(-slope)
+    slope_n, _, _, _, _ = st.linregress(omega, np.log(N))
+    Rb = np.exp(-slope_n)
 
-    Rb  = float(np.exp(np.mean(np.log(Rb_per_order))))
-    Rl  = float(np.exp(np.mean(np.log(Rl_per_order))))
-    Rb0 = float(Rb_per_order[0])
-    Rl0 = float(Rl_per_order[0])
+    # 4. Regression for Length Ratio (Rl)
+    # Equation: ln(L_mean) = Intercept + omega * ln(Rl)
+    # Slope = ln(Rl)  =>  Rl = exp(slope)
+    slope_l, _, _, _, _ = st.linregress(omega, np.log(L_mean))
+    Rl = np.exp(slope_l)
 
-    return Rb, Rl, Rb0, Rl0
+    # 5. Local Ratios (Diagnostic for Kh/Ks)
+    # These are strictly between the first two available orders (usually 0 and 1)
+    # Rb0 = N[0]/N[1], Rl0 = L_mean[1]/L_mean[0]
+    Rb0 = N[0] / N[1]
+    Rl0 = L_mean[1] / L_mean[0]
+
+    return float(Rb), float(Rl), float(Rb0), float(Rl0)
 
 
 # =============================================================================
