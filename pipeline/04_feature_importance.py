@@ -93,7 +93,7 @@ DOMAIN_REDUCED_FEATURES = [
     'Z_mean',      # mean elevation            — scaling
     'Z_cv',        # elevation variability     — relief organisation
     'Z_skew',      # elevation skewness        — hypsometry proxy
-    'grd_mean',    # mean gradient             — hillslope steepness
+    'Rl',          # length ratio              — network geometry
     'htcrv_med',   # median hilltop curvature  — erosion-uplift balance
     'crv_mean',    # mean curvature            — overall curvature
     'crv_kurt',    # curvature kurtosis        — curvature heterogeneity
@@ -112,7 +112,7 @@ DOMAIN_REDUCED_FEATURES = [
 
 def get_feature_clusters(
     X: pd.DataFrame,
-    dist_thresh: float = 0.25,
+    dist_thresh: float = 0.12,
     output_dir: str = 'outputs',
     git_hash: str = 'latest',
     label_tag: str = '',
