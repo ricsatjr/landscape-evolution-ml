@@ -538,7 +538,7 @@ def parse_args():
     p.add_argument('--labels',        nargs='+', default=['u_ks', 'kh_ks'],
                    help='Target columns (log₁₀-transformed at training time).')
     p.add_argument('--test-fraction', type=float, default=0.1)
-    p.add_argument('--dist-thresh',   type=float, default=0.25,
+    p.add_argument('--dist-thresh',   type=float, default=0.12,
                    help='Spearman distance threshold for feature clustering.')
     p.add_argument('--features-hash', default=None,
                    help='Git hash suffix of feature pkl files to load. '
