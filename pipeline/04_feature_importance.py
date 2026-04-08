@@ -25,13 +25,31 @@ Workflow
 6. Compute permutation feature importance on the reduced final models.
 7. Save ranked importance table (CSV) and all figures.
 
+The permutation importance scorer is controlled by ``--target``:
+  - ``both`` (default): mean R² across U/Ks and Kh/Ks — matches the
+    multi-output scoring used during nested CV.
+  - ``uks``: R² for U/Ks only.
+  - ``khks``: R² for Kh/Ks only.
+
 Usage
 -----
-    # Full run (clustering → CV → comparison → importance)
+    # Full run (clustering → CV → comparison → importance), mean R²
     python 04_feature_importance.py \\
         --data-dir data/features \\
         --output-dir outputs \\
         --full-results-pkl outputs/nested-cv-results-full-abc1234.pkl
+
+    # Per-target importance (U/Ks)
+    python 04_feature_importance.py \\
+        --skip-cv \\
+        --results-pkl outputs/nested-cv-results-reduced-abc1234.pkl \\
+        --target uks
+
+    # Per-target importance (Kh/Ks)
+    python 04_feature_importance.py \\
+        --skip-cv \\
+        --results-pkl outputs/nested-cv-results-reduced-abc1234.pkl \\
+        --target khks
 
     # Data-driven feature selection
     python 04_feature_importance.py --feature-selection random
@@ -104,6 +122,55 @@ DOMAIN_REDUCED_FEATURES = [
     'Rb0',         # zero-order bifurcation    — primary finding
     'Rl0',         # zero-order length ratio   — network geometry
 ]
+
+# Maps --target CLI value → actual column name in y (log-transformed targets).
+# None signals the default multi-output mean R² behaviour.
+TARGET_COL_MAP = {
+    'both': None,
+    'uks':  'log_u_ks',
+    'khks': 'log_kh_ks',
+}
+
+# x-axis labels for the permutation importance figure, keyed by target_col.
+TARGET_XLABELS = {
+    None:          r'feature importance'
+                   r' ($\overline{R^2} - \overline{R^2}_\mathrm{perm}$)',
+    'log_u_ks':    r'feature importance'
+                   r' ($R^2_{U/K_\mathrm{s}} - R^2_{\mathrm{perm},\,U/K_\mathrm{s}}$)',
+    'log_kh_ks':   r'feature importance'
+                   r' ($R^2_{K_\mathrm{h}/K_\mathrm{s}}'
+                   r' - R^2_{\mathrm{perm},\,K_\mathrm{h}/K_\mathrm{s}}$)',
+}
+
+
+# =============================================================================
+# Per-target permutation scorer
+# =============================================================================
+
+def _make_single_target_scorer(target_idx: int):
+    """Return a scorer that evaluates R² for one target of a multi-output model.
+
+    ``permutation_importance`` requires a scorer that returns a single scalar.
+    For multi-output regressors, the default ``'r2'`` scorer returns the mean
+    R² across all targets.  This factory wraps ``r2_score`` with
+    ``multioutput='raw_values'`` and selects the element at ``target_idx``,
+    allowing per-target importance measurement without retraining.
+
+    Parameters
+    ----------
+    target_idx : int
+        Index of the target column in the model's output (0-based).
+        Corresponds to the position of the target in ``y.columns``.
+
+    Returns
+    -------
+    callable
+        Scorer compatible with ``sklearn.inspection.permutation_importance``.
+    """
+    def _score(estimator, X, y):
+        y_pred = estimator.predict(X)
+        return r2_score(y, y_pred, multioutput='raw_values')[target_idx]
+    return _score
 
 
 # =============================================================================
@@ -311,27 +378,45 @@ def compute_permutation_importance(
     n_repeats: int = 10,
     random_state: int = 42,
     box: bool = False,
+    target_col: str | None = None,
 ) -> tuple:
     """Compute and plot permutation importance for one fitted model.
 
     Parameters
     ----------
     reg : fitted Pipeline
-    X : pd.DataFrame — test features (reduced set)
-    y : pd.DataFrame — log₁₀ test targets
+    X : pd.DataFrame
+        Test features (reduced set).
+    y : pd.DataFrame
+        log₁₀ test targets — always the full two-column DataFrame regardless
+        of ``target_col``.  The model was trained on both targets and must
+        receive both for prediction.
     ax : matplotlib Axes
     n_repeats : int
     random_state : int
-    box : bool — True → box plots, False → scatter + mean marker
+    box : bool
+        True → box plots, False → scatter + mean marker.
+    target_col : str or None
+        If None (default), scoring uses mean R² across all targets,
+        matching the multi-output CV scoring.
+        If a column name (e.g. ``'log_u_ks'``), scoring uses R² for that
+        target only via ``_make_single_target_scorer``.
 
     Returns
     -------
     ax : matplotlib Axes
-    importances_mean : np.ndarray — mean importance per feature
+    importances_mean : np.ndarray
+        Mean importance per feature across permutation repeats.
     """
+    if target_col is not None:
+        target_idx = list(y.columns).index(target_col)
+        scoring = _make_single_target_scorer(target_idx)
+    else:
+        scoring = 'r2'
+
     result = permutation_importance(
         reg, X, y, n_repeats=n_repeats, random_state=random_state,
-        n_jobs=-1, scoring='r2',
+        n_jobs=-1, scoring=scoring,
     )
     sorted_idx = result.importances_mean.argsort()
 
@@ -381,22 +466,33 @@ def analyze_feature_importance(
     n_repeats: int = 10,
     random_state: int = 42,
     box: bool = False,
+    target_col: str | None = None,
 ) -> pd.DataFrame:
     """Compute permutation importance for all models and aggregate ranks.
 
     Parameters
     ----------
-    results : dict — reduced-feature nested-CV results (with ``final_model``)
-    all_features : list — full list of 39 feature names
-    reduced_features : list — selected feature subset
+    results : dict
+        Reduced-feature nested-CV results (with ``final_model``).
+    all_features : list
+        Full list of 39 feature names.
+    reduced_features : list
+        Selected feature subset.
     cluster_id_to_feature_ids : dict
-    X_test : pd.DataFrame — reduced test features
-    y_test : pd.DataFrame — log₁₀ test targets
+    X_test : pd.DataFrame
+        Reduced test features.
+    y_test : pd.DataFrame
+        log₁₀ test targets — always the full two-column DataFrame.
     output_dir : str
     git_hash : str
+    label_tag : str
     n_repeats : int
     random_state : int
     box : bool
+    target_col : str or None
+        Passed through to ``compute_permutation_importance``.
+        None → mean R² across both targets (default).
+        ``'log_u_ks'`` or ``'log_kh_ks'`` → single-target R².
 
     Returns
     -------
@@ -420,6 +516,7 @@ def analyze_feature_importance(
         axes[i], imp_mean = compute_permutation_importance(
             reg, X_test, y_test, axes[i],
             n_repeats=n_repeats, random_state=random_state, box=box,
+            target_col=target_col,
         )
         feat_imp_df[model] = imp_mean
         feat_imp_df[model] = feat_imp_df[model].rank(ascending=False)
@@ -433,16 +530,21 @@ def analyze_feature_importance(
         if model == 'mlp':
             axes[i].legend(fontsize=7, loc='center right')
 
-    fig.supxlabel(r'feature importance ($R^2 - R^2_\mathrm{perm}$)', fontsize=10)
+    fig.supxlabel(TARGET_XLABELS[target_col], fontsize=10)
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'feature-importance-{label_tag}-{git_hash}')
+
+    # filename suffix encodes which target was scored
+    target_tag = f'-{target_col}' if target_col is not None else ''
+    stem = os.path.join(
+        output_dir, f'feature-importance{target_tag}-{label_tag}-{git_hash}'
+    )
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
     plt.close(fig)
 
     # Aggregate: median rank and std of ranks across models
     rank_cols = [c for c in feat_imp_df.columns
-                 if c not in ('median_rank', 'related features')]
+                 if c not in ('median_rank', 'rank_std', 'related features')]
     feat_imp_df['median_rank'] = feat_imp_df[rank_cols].median(axis=1)
     feat_imp_df['rank_std']    = feat_imp_df[rank_cols].std(axis=1)
     feat_imp_df = np.round(
@@ -458,7 +560,10 @@ def analyze_feature_importance(
                 feat_imp_df.loc[rfeat, 'related features'] = ', '.join(companions)
 
     feat_imp_df.to_csv(
-        os.path.join(output_dir, f'feature-importance-{label_tag}-{git_hash}.csv')
+        os.path.join(
+            output_dir,
+            f'feature-importance{target_tag}-{label_tag}-{git_hash}.csv'
+        )
     )
     return feat_imp_df
 
@@ -475,28 +580,41 @@ def plot_top_features_vs_targets(
     output_dir: str = 'outputs',
     git_hash: str = 'latest',
     label_tag: str = '',
+    target_col: str | None = None,
     figure_width_cm: float = 19.0,
 ):
     """Scatter plots of the top-N features against each target.
 
+    When ``target_col`` is set, only the corresponding target column is plotted
+    (one row of subplots).  When None, all targets are plotted (one row each).
+
     Parameters
     ----------
-    X_train : pd.DataFrame — reduced training features
-    y_train : pd.DataFrame — log₁₀ training targets
-    feat_imp_df : pd.DataFrame — output of ``analyze_feature_importance``
+    X_train : pd.DataFrame
+        Reduced training features.
+    y_train : pd.DataFrame
+        log₁₀ training targets — always the full two-column DataFrame.
+    feat_imp_df : pd.DataFrame
+        Output of ``analyze_feature_importance``.
     top_n : int
     output_dir : str
     git_hash : str
+    target_col : str or None
+        If set, only this target column is plotted.
     figure_width_cm : float
     """
-    labels   = y_train.columns
+    labels = (
+        [target_col] if target_col is not None
+        else list(y_train.columns)
+    )
     top_feat = feat_imp_df.index[:top_n]
     fw       = figure_width_cm / 2.54
     fig_kw   = dict(alpha=0.2, lw=0, marker='.', mew=0)
 
     fig, ax = plt.subplots(
         nrows=len(labels), ncols=top_n,
-        figsize=(fw, fw * 0.4),
+        figsize=(fw, fw * 0.4 * len(labels)),
+        squeeze=False,
     )
 
     for f, feat in enumerate(top_feat):
@@ -516,7 +634,11 @@ def plot_top_features_vs_targets(
                 ax[t, f].set_xticklabels([])
 
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'top-features-vs-targets-{label_tag}-{git_hash}')
+    target_tag = f'-{target_col}' if target_col is not None else ''
+    stem = os.path.join(
+        output_dir,
+        f'top-features-vs-targets{target_tag}-{label_tag}-{git_hash}'
+    )
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
     plt.close(fig)
@@ -559,6 +681,17 @@ def parse_args():
     p.add_argument('--random-state',  type=int, default=42)
     p.add_argument('--top-n',         type=int, default=5,
                    help='Number of top features to plot against targets.')
+    p.add_argument('--target',        choices=['both', 'uks', 'khks'],
+                   default='both',
+                   help=(
+                       'Target for permutation importance scoring. '
+                       '"both" (default): mean R² across U/Ks and Kh/Ks, '
+                       'matching the multi-output CV scoring. '
+                       '"uks": R² for U/Ks only. '
+                       '"khks": R² for Kh/Ks only. '
+                       'Affects figure filename suffix and x-axis label; '
+                       'does not affect clustering or nested CV.'
+                   ))
     p.add_argument('--skip-cv',       action='store_true',
                    help='Skip nested CV; load existing reduced pickle.')
     p.add_argument('--results-pkl',   default=None,
@@ -577,6 +710,9 @@ def main():
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     git_hash = _git_hash()
+
+    # Resolve --target to the actual column name in y (or None for both)
+    target_col = TARGET_COL_MAP[args.target]
 
     # 1. Load full-feature results pickle if provided (paired mode)
     full_results = None
@@ -599,9 +735,6 @@ def main():
         print("\nStandalone mode: using CLI parameters.")
 
     # 2. Load data
-    # In paired mode, load all available feature files from --data-dir
-    # without filtering by job_ids — the user is responsible for pointing
-    # --data-dir to the same data used in 03. Job IDs are verified below.
     df = load_features(args.data_dir, job_ids=args.job_ids,
                        features_hash=meta.get('features_hash', args.features_hash))
 
@@ -618,15 +751,20 @@ def main():
                 f"used in 03."
             )
 
-    # In paired mode, labels are inherited from _meta
     label_names = meta.get('label_names', args.labels)
     X, y = split_features_labels(df, label_names)
     all_features = list(X.columns)
     print(f"\nFeatures : {len(all_features)} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
 
+    # Validate target_col against actual y columns
+    if target_col is not None and target_col not in y.columns:
+        raise ValueError(
+            f"--target '{args.target}' maps to column '{target_col}' "
+            f"which is not present in y. Available columns: {list(y.columns)}"
+        )
+
     # 3. Train / test split
-    # In paired mode, inherit exact split indices from _meta
     if meta.get('train_idx') and meta.get('test_idx'):
         train_idx = meta['train_idx']
         test_idx  = meta['test_idx']
@@ -641,14 +779,8 @@ def main():
         y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
 
-    # In paired mode, random_state is inherited from _meta
     random_state = meta.get('random_state', args.random_state)
-
-    # label_tag: derived from _meta in paired mode, from CLI in standalone mode
-    # Used consistently in all output filenames for this run.
-    label_tag = '-'.join(meta.get('label_names', args.labels))
-
-    # features_hash: inherited from _meta in paired mode, from CLI in standalone
+    label_tag    = '-'.join(meta.get('label_names', args.labels))
     features_hash = meta.get('features_hash', args.features_hash)
 
     # 4. Feature clustering
@@ -728,6 +860,8 @@ def main():
         print("\nStandalone mode: skipping full-vs-reduced comparison.")
 
     # 8. Permutation importance
+    print(f"\nScoring target: {args.target!r}"
+          + (f" (column: {target_col})" if target_col else " (mean across both)"))
     plt.close('all')
     feat_imp_df = analyze_feature_importance(
         results,
@@ -741,6 +875,7 @@ def main():
         label_tag=label_tag,
         n_repeats=args.n_repeats,
         random_state=random_state,
+        target_col=target_col,
     )
 
     print("\n── Feature importance (median rank) ──")
@@ -754,6 +889,7 @@ def main():
         output_dir=args.output_dir,
         git_hash=git_hash,
         label_tag=label_tag,
+        target_col=target_col,
     )
 
 
