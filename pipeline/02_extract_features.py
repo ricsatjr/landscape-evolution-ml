@@ -844,6 +844,14 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
 
     param_df = pd.read_pickle(param_file)
 
+
+    # Legacy fix: build tmux-sess lookup for elevts filename construction
+    if 'tmux-sess' in param_df.columns and 'df-ind' in param_df.columns:
+        tmux_lookup = param_df.set_index('df-ind')['tmux-sess'].to_dict()
+    else:
+        tmux_lookup = None
+
+
     # Build per-landscape ts_index lookup
     if transient_map is not None:
         ts_lookup = transient_map.set_index('landscape_idx')['selected_ts_index'].to_dict()
@@ -861,7 +869,13 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
         # Resolve ts_index for this landscape
         landscape_ts = ts_lookup[landscape_idx] if ts_lookup is not None else ts_index
 
-        npy_file = data_dir / f'elevts-{job_id}-{landscape_idx}-{landscape_ts}.npy'
+	#legacy fix:
+        if tmux_lookup is not None:
+            tmux_sess = tmux_lookup[landscape_idx]
+            npy_file = data_dir / f'elevts-{tmux_sess}-{landscape_idx}-{landscape_ts}.npy'
+        else:
+            npy_file = data_dir / f'elevts-{job_id}-{landscape_idx}-{landscape_ts}.npy'
+
 
         if not npy_file.exists():
             print(f"  [{landscape_idx}] NOT FOUND: {npy_file.name}")
@@ -1118,15 +1132,33 @@ if __name__ == "__main__":
     else:
         transient_map = None
 
+    
+
+
     if args.stage in ('rasnet', 'all'):
-        run_stage1_rasnet(
-            data_dir=args.data_dir,
-            output_dir=rasnet_dir,
-            job_id=job_id,
-            elev_err=args.elev_err,
-            ts_index=args.ts_index,
-            transient_map=transient_map,
-        )
+        if job_id == 'all':
+            job_ids = sorted(transient_map['job_id'].unique())
+            print(f"Processing {len(job_ids)} jobs: {job_ids[:5]}...")
+            for jid in job_ids:
+                jid_map = transient_map[transient_map['job_id'] == jid].reset_index(drop=True)
+                run_stage1_rasnet(
+                    data_dir=args.data_dir,
+                    output_dir=rasnet_dir,
+                    job_id=int(jid),
+                    elev_err=args.elev_err,
+                    ts_index=args.ts_index,
+                    transient_map=jid_map,
+                )
+        else:
+            run_stage1_rasnet(
+                data_dir=args.data_dir,
+                output_dir=rasnet_dir,
+                job_id=job_id,
+                elev_err=args.elev_err,
+                ts_index=args.ts_index,
+                transient_map=transient_map,
+            )
+
 
     if args.stage in ('features', 'all'):
         run_stage2_features(

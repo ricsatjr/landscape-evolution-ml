@@ -207,6 +207,16 @@ def build_transient_map(params_dir,
     for pkl_path in pkl_files:
         df_params = pd.read_pickle(pkl_path)
 
+
+        # --- Legacy pkl fix: derive job_id from filename, map df-ind -> landscape_idx ---
+        if 'job_id' not in df_params.columns and 'df-ind' in df_params.columns:
+            job_id_from_file = int(pkl_path.stem.split('-')[1])
+            df_params['job_id'] = job_id_from_file
+            df_params = df_params.rename(columns={'df-ind': 'landscape_idx'})
+        # -------------------------------------------------------------------------------
+
+
+
         # Guard: skip rows where ts_mean_elevs was not saved (e.g. failed runs)
         missing = df_params['ts_mean_elevs'].isna()
         if missing.any():
