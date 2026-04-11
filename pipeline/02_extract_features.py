@@ -1137,8 +1137,8 @@ if __name__ == "__main__":
 
     if args.stage in ('rasnet', 'all'):
         if job_id == 'all':
-	    if transient_map is not None:
-	        job_ids = sorted(transient_map['job_id'].unique())
+            if transient_map is not None:
+                job_ids = sorted(transient_map['job_id'].unique())
 	    else:
 	        # Get job_ids from params filenames in data_dir
 	        job_ids = sorted([
