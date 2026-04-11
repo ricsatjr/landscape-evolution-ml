@@ -1055,7 +1055,84 @@ def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest',
 # ENTRY POINT
 # =============================================================================
 
-if args.stage in ('rasnet', 'all'):
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Extract topographic features from synthetic landscape elevation "
+            "grids for the LE-ML pipeline (Saturay et al., 2025). "
+            "See DATA_PROVENANCE.md for full documentation of file naming "
+            "and seed conventions."
+        )
+    )
+    parser.add_argument(
+        '--stage', type=str, required=True,
+        choices=['rasnet', 'features', 'all'],
+        help=(
+            "Pipeline stage to run. 'rasnet': load elevation grids, run flow "
+            "routing, save intermediate rasnet files. 'features': load rasnet "
+            "files, compute 39-feature vectors, save feature DataFrames. "
+            "'all': run both stages sequentially."
+        )
+    )
+    parser.add_argument(
+        '--data-dir', type=str, required=True,
+        help="Input data directory (elevation .npy files for 'rasnet' stage; "
+             "rasnet .pkl files for 'features' stage)."
+    )
+    parser.add_argument(
+        '--job-id', type=str, required=True,
+        help="Job identifier for filtering input files (integer), or 'all' "
+             "to process all available files."
+    )
+    parser.add_argument(
+        '--output-dir', type=str, default='.',
+        help="Output directory for feature pkl files (default: current)."
+    )
+    parser.add_argument(
+        '--rasnet-dir', type=str, default=None,
+        help=(
+            "Directory for rasnet intermediate files. Used as output for "
+            "'rasnet' stage and input for 'features' stage. "
+            "Defaults to --output-dir if not specified."
+        )
+    )
+    parser.add_argument(
+        '--elev-err', type=float, default=ELEV_ERR,
+        help=f"Elevation noise magnitude in meters (default: {ELEV_ERR} m)."
+    )
+    parser.add_argument(
+        '--ts-index', type=int, default=TS_INDEX,
+        help=f"Time step index of elevation snapshot (default: {TS_INDEX}). "
+             f"Ignored when --transient-map is provided."
+    )
+    parser.add_argument(
+        '--transient-map', type=str, default=None,
+        help="Path to transient_map.csv from 01b_select_transient_snapshots.py. "
+             "When provided, each landscape uses its own selected_ts_index. "
+             "When absent, --ts-index is used for all landscapes."
+    )
+
+    args = parser.parse_args()
+
+    git_hash = _git_hash()
+    job_id = args.job_id if args.job_id == 'all' else int(args.job_id)
+    rasnet_dir = args.rasnet_dir if args.rasnet_dir else (
+        args.output_dir if args.stage == 'all' else args.data_dir
+    )
+
+    # Load transient map if provided
+    if args.transient_map is not None:
+        transient_map = pd.read_csv(args.transient_map)
+        if job_id != 'all':
+            transient_map = transient_map[transient_map['job_id'] == job_id].reset_index(drop=True)
+        if transient_map.empty:
+            raise ValueError(
+                f"No entries found for job_id={job_id} in {args.transient_map}"
+            )
+    else:
+        transient_map = None
+
+    if args.stage in ('rasnet', 'all'):
         if job_id == 'all':
             if transient_map is not None:
                 job_ids = sorted(transient_map['job_id'].unique())
@@ -1085,3 +1162,13 @@ if args.stage in ('rasnet', 'all'):
                 ts_index=args.ts_index,
                 transient_map=transient_map,
             )
+
+    if args.stage in ('features', 'all'):
+        run_stage2_features(
+            data_dir=rasnet_dir,
+            output_dir=args.output_dir,
+            job_id=job_id,
+            git_hash=git_hash,
+            transient_map=transient_map,
+            ts_index=args.ts_index,
+        )
