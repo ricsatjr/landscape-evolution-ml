@@ -1136,26 +1136,26 @@ if __name__ == "__main__":
 
 
     if args.stage in ('rasnet', 'all'):
-	    if job_id == 'all':
-	        if transient_map is not None:
-	            job_ids = sorted(transient_map['job_id'].unique())
-	        else:
-	            # Get job_ids from params filenames in data_dir
-	            job_ids = sorted([
-	                int(p.stem.split('-')[1])
-	                for p in Path(args.data_dir).glob('params-*.pkl')
-	            ])
-	        print(f"Processing {len(job_ids)} jobs: {job_ids[:5]}...")
-	        for jid in job_ids:
-	            jid_map = transient_map[transient_map['job_id'] == jid].reset_index(drop=True) if transient_map is not None else None
-	            run_stage1_rasnet(
-	                data_dir=args.data_dir,
-	                output_dir=rasnet_dir,
-	                job_id=int(jid),
-	                elev_err=args.elev_err,
-	                ts_index=args.ts_index,
-	                transient_map=jid_map,
-	            )
+	if job_id == 'all':
+	    if transient_map is not None:
+	        job_ids = sorted(transient_map['job_id'].unique())
+	    else:
+	        # Get job_ids from params filenames in data_dir
+	        job_ids = sorted([
+	            int(p.stem.split('-')[1])
+	            for p in Path(args.data_dir).glob('params-*.pkl')
+	        ])
+	    print(f"Processing {len(job_ids)} jobs: {job_ids[:5]}...")
+	    for jid in job_ids:
+	        jid_map = transient_map[transient_map['job_id'] == jid].reset_index(drop=True) if transient_map is not None else None
+	        run_stage1_rasnet(
+	            data_dir=args.data_dir,
+	            output_dir=rasnet_dir,
+	            job_id=int(jid),
+	            elev_err=args.elev_err,
+	            ts_index=args.ts_index,
+	            transient_map=jid_map,
+	        )
         else:
             run_stage1_rasnet(
                 data_dir=args.data_dir,
