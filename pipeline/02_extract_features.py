@@ -6,7 +6,7 @@
 Extracts topographic features from synthetic landscape elevation grids for
 training the LE-ML inverse model pipeline described in:
 
-    Saturay et al. (2025). [Title]. JGR: Earth Surface. [DOI]
+    Saturay et al. (2026). [Title]. [Journal] [vol(num)pages]. [DOI]
 
 This script implements the feature generation step (Section 3.1, Feature
 generation) and operates in two stages that can be run independently:

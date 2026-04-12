@@ -1,6 +1,5 @@
 name: leml
 # Conda environment for the landscape-evolution-ml pipeline
-# Saturay et al. (2025), JGR: Earth Surface
 #
 # Create environment:
 #   conda env create -f environment.yml

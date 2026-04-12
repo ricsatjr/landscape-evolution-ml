@@ -6,7 +6,7 @@
 Generates synthetic landscape elevation grids for training the LE-ML inverse
 model pipeline described in:
 
-    Saturay et al. (2025). [Title]. JGR: Earth Surface. [DOI]
+    Saturay et al. (2026). [Title]. [Journal] [vol(num)pages]. [DOI]
 
 This script implements the forward model (Section 2, Landscapes from LEM).
 For each valid LE parameter set, it evolves a numerical landscape to

@@ -1,6 +1,6 @@
 # landscape-evolution-ml
 
-**Numerical modeling and machine learning pipeline for parameter estimation, hypothesis testing, and discovery in landscape evolution**
+**Numerical modeling and machine learning pipeline for parameter estimation, hypothesis testing, and discovery in landscape evolution**
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
@@ -11,11 +11,6 @@
 ---
 
 ## Overview
-
-This repository contains the code accompanying:
-
-> **Saturay, R.M., Ramos, N.T., & Bantang, J.Y.** (2025). *[Title]*. 
-> Journal of Geophysical Research: Earth Surface. [DOI — to be added upon publication]
 
 Inferring landscape evolution parameters from topography is a fundamental inverse problem in geomorphology, made difficult by the scarcity of field sites with well-constrained process rates and the non-uniqueness of inverse problem solutions. 
 
@@ -205,29 +200,7 @@ landscape-evolution-ml/
 
 ## Citation
 
-If you use this code or the accompanying dataset, please cite:
 
-```bibtex
-@article{saturay2025,
-  author  = {Saturay, Ricarido M. and Ramos, Noelynna T. and Bantang, Johnrob Y.},
-  title   = {[Title]},
-  journal = {Journal of Geophysical Research: Earth Surface},
-  year    = {2025},
-  doi     = {[DOI — to be added upon publication]}
-}
-```
-
-If you use the dataset specifically, please also cite the Zenodo archive:
-
-```bibtex
-@dataset{saturay2025data,
-  author    = {Saturay, Ricarido M. and Ramos, Noelynna T. and Bantang, Johnrob Y.},
-  title     = {Synthetic landscape evolution dataset for LE-ML pipeline},
-  year      = {2025},
-  publisher = {Zenodo},
-  doi       = {[DOI — to be added upon publication]}
-}
-```
 
 ---
 

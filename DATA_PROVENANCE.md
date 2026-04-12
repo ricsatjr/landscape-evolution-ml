@@ -3,8 +3,10 @@
 ## Overview
 
 This document describes how the synthetic landscape dataset accompanying
-Saturay et al. (2025, JGR: Earth Surface) was generated, including the
-conventions used to ensure reproducibility of each individual landscape.
+
+Saturay et al. (2026). [Title].  [Journal] [vol(num)pages]. [DOI] 
+
+was generated, including the conventions used to ensure reproducibility of each individual landscape.
 
 The dataset consists of synthetic elevation grids and their corresponding
 landscape evolution (LE) parameter sets, generated using the forward model
@@ -348,10 +350,8 @@ generation. Key dependencies:
 
 If you use this dataset, please cite:
 
-> Saturay, R.L., Ramos, N.T., & Bantang, J.Y. (2025). [Title]. 
-> Journal of Geophysical Research: Earth Surface. [DOI]
+> Saturay et al. (2026). [Title]. [Journal] [vol(num)pages]. [DOI]
 
 And the underlying modeling framework:
 
-> Barnhart, K.R., et al. (2020). Landlab v2.0: A software package for 
-> Earth surface dynamics. Earth Surface Dynamics, 8(2), 379–397.
+> Barnhart, K.R., et al. (2020). Landlab v2.0: A software package for Earth surface dynamics. Earth Surface Dynamics, 8(2), 379–397.
