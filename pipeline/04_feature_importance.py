@@ -14,9 +14,11 @@ explore
     Load features from ``--features-dir`` and analyse inter-feature
     correlations via hierarchical clustering on Spearman rank distances.
     Produces a dendrogram figure annotated with the selected representative
-    features.  No models are trained; no labels are required.  Use this
-    mode to inspect feature redundancy and tune ``--cluster-threshold``
-    and ``--cluster-selection`` before committing to a reduced feature set.
+    features.  Clustering is performed on the training subset only (inherited
+    from ``--models-pkl`` _meta) to match the behaviour of reduced mode and
+    avoid data leakage.  Use this mode to inspect feature redundancy and tune
+    ``--cluster-threshold`` and ``--cluster-selection`` before committing to a
+    reduced feature set.
 
 reduced
     Full pipeline from feature clustering through to permutation importance
@@ -36,6 +38,17 @@ importance
     individual target and then for all targets combined (mean R2); the
     combined run is omitted when only one target is present.
 
+Feature clustering
+------------------
+Clustering is always performed on the training subset only to avoid data
+leakage from the test set into the feature selection step.
+
+When ``--cluster-selection domain`` is used, the list of representative
+features must be supplied via ``--domain-features``.  The list is validated
+against the clustering result at the given ``--cluster-threshold``: if any
+two features in the list belong to the same cluster, an error is raised
+naming the offending features so the user can resolve the conflict.
+
 Output filename conventions
 ---------------------------
 All output files include a ``{label_tag}`` (hyphen-joined target column names)
@@ -47,19 +60,25 @@ Permutation importance outputs carry an additional target suffix:
 
 Usage
 -----
-    # Explore feature correlations only
+    # Explore feature correlations only (random selection)
     python 04_feature_importance.py \\
         --mode explore \\
         --features-dir data/features \\
-        --output-dir outputs/explore
+        --models-pkl outputs/models/nested-cv-results-full-abc1234.pkl \\
+        --output-dir outputs/explore \\
+        --cluster-threshold 0.3 \\
+        --cluster-selection random
 
-    # Full reduced-feature pipeline
+    # Full reduced-feature pipeline (domain selection)
     python 04_feature_importance.py \\
         --mode reduced \\
         --features-dir data/features \\
         --models-pkl outputs/models/nested-cv-results-full-abc1234.pkl \\
         --reduced-models-pkl outputs/models/nested-cv-results-reduced-abc1234.pkl \\
-        --output-dir outputs/reduced
+        --output-dir outputs/reduced \\
+        --cluster-threshold 0.3 \\
+        --cluster-selection domain \\
+        --domain-features Z_mean hyp_int Rl grd_std Rb Rb0 Rl0
 
     # Permutation importance on existing reduced models
     python 04_feature_importance.py \\
@@ -140,32 +159,6 @@ def _importance_xlabel(target_col: str | None) -> str:
 
 
 # =============================================================================
-# Domain-driven reduced feature set
-# =============================================================================
-
-# Features chosen to represent each correlation cluster while maximising
-# physical interpretability and ease of computation.
-# Must be a subset of the 39 features written by 02_extract_features.py.
-# Update this list if the clustering results change substantially.
-DOMAIN_REDUCED_FEATURES = [
-    'n0',          # zero-order channel count  — primary finding
-    'Z_mean',      # mean elevation            — scaling
-    'Z_cv',        # elevation variability     — relief organisation
-    'Z_skew',      # elevation skewness        — hypsometry proxy
-    'Rl',          # length ratio              — network geometry
-    'htcrv_med',   # median hilltop curvature  — erosion-uplift balance
-    'crv_mean',    # mean curvature            — overall curvature
-    'crv_kurt',    # curvature kurtosis        — curvature heterogeneity
-    'htcrv_min',   # minimum hilltop curvature — extreme curvature signal
-    'htcrv_max',   # maximum hilltop curvature — extreme curvature signal
-    'hyp_int',     # hypsometric integral      — landscape maturity
-    'Rb',          # mean bifurcation ratio    — network structure
-    'Rb0',         # zero-order bifurcation    — primary finding
-    'Rl0',         # zero-order length ratio   — network geometry
-]
-
-
-# =============================================================================
 # Per-target permutation scorer
 # =============================================================================
 
@@ -208,6 +201,7 @@ def get_feature_clusters(
     git_hash: str = 'latest',
     label_tag: str = '',
     cluster_selection: str = 'domain',
+    domain_features: list | None = None,
     random_state: int = 42,
 ) -> tuple:
     """Identify multicollinear feature clusters via hierarchical clustering.
@@ -215,21 +209,22 @@ def get_feature_clusters(
     Computes a Spearman rank correlation matrix, converts it to a distance
     matrix (``1 - |rho|``), applies Ward linkage, and cuts the dendrogram at
     ``dist_thresh`` to define clusters.  One representative feature per cluster
-    is selected either from the domain-driven list (``DOMAIN_REDUCED_FEATURES``)
-    or at random.  Produces a dendrogram figure with selected features marked
-    by a leading asterisk.
+    is selected either from the domain-driven list (``domain_features``) or at
+    random.  Produces a dendrogram figure with selected features marked by a
+    leading asterisk.
+
+    Clustering is always performed on the training subset only to avoid data
+    leakage from the test set into the feature selection step.
 
     Parameters
     ----------
     X : pd.DataFrame
-        Full feature matrix.  Should contain only the training set to avoid
-        data leakage into the correlation structure.
+        Feature matrix — must contain only the training set.
     dist_thresh : float
         Distance threshold for cutting the dendrogram into clusters.
         Features with Spearman distance <= dist_thresh are grouped into the
         same cluster.  Smaller values produce more clusters (less aggressive
-        redundancy removal).  Default 0.12 was tuned on the synthetic
-        landscape ensemble.
+        redundancy removal).
     output_dir : str
         Directory for saving the dendrogram figure.
     git_hash : str
@@ -237,11 +232,16 @@ def get_feature_clusters(
     label_tag : str
         Hyphen-joined target label names, appended to output filenames.
     cluster_selection : str
-        ``'domain'``: use ``DOMAIN_REDUCED_FEATURES`` (default).  Features
-        must be a subset of ``X.columns``; raises ``ValueError`` if any are
-        missing.
+        ``'domain'``: use the list supplied in ``domain_features``.  Each
+        feature must be present in ``X.columns``; raises ``ValueError`` if any
+        are missing or if two selected features share a cluster.
         ``'random'``: draw one representative per cluster uniformly at random,
         seeded by ``random_state``.
+    domain_features : list of str or None
+        List of representative features to use when
+        ``cluster_selection='domain'``.  Must satisfy the one-per-cluster
+        constraint at ``dist_thresh``; validated automatically.  Ignored when
+        ``cluster_selection='random'``.
     random_state : int
         Random seed for ``'random'`` cluster selection.  Has no effect when
         ``cluster_selection='domain'``.
@@ -266,10 +266,10 @@ def get_feature_clusters(
     distance_matrix = np.clip(distance_matrix, 0, 1)
     distance_matrix = (distance_matrix + distance_matrix.T) / 2
     np.fill_diagonal(distance_matrix, 0)
-    dist_linkage    = hierarchy.ward(squareform(distance_matrix))
+    dist_linkage = hierarchy.ward(squareform(distance_matrix))
 
     fig, ax = plt.subplots(figsize=(14 / 2.54, 8))
-    hierarchy.dendrogram(
+    dendro = hierarchy.dendrogram(
         dist_linkage,
         labels=X.columns.to_list(),
         ax=ax,
@@ -277,6 +277,7 @@ def get_feature_clusters(
         orientation='right',
         color_threshold=dist_thresh,
     )
+    dendrogram_order = dendro["leaves"][::-1]  # top-to-bottom leaf order
     ax.axvline(x=dist_thresh, ls='--', c='k', label='threshold distance')
     ax.set_xlabel('distance', fontsize=8)
     ax.legend(loc='lower right', fontsize=8)
@@ -293,17 +294,57 @@ def get_feature_clusters(
             int(rng.choice(v)) for v in cluster_id_to_feature_ids.values()
         ]
         reduced_features = [X.columns[s] for s in selected_idx]
-        print(f"Random cluster selection ({len(reduced_features)} features): "
-              f"{reduced_features}")
+        ordered = [f for i in dendrogram_order
+                   if (f := X.columns[i]) in reduced_features]
+        print(f"Random cluster selection ({len(reduced_features)} features, "
+              f"dendrogram order): {ordered}")
     else:
-        reduced_features = DOMAIN_REDUCED_FEATURES
-        missing = [f for f in reduced_features if f not in X.columns]
+        # domain selection
+        if domain_features is None:
+            raise ValueError(
+                "cluster_selection='domain' requires domain_features to be provided."
+            )
+        missing = [f for f in domain_features if f not in X.columns]
         if missing:
             raise ValueError(
-                f"DOMAIN_REDUCED_FEATURES contains columns not in X: {missing}"
+                f"--domain-features contains columns not found in the feature "
+                f"set: {missing}"
             )
-        print(f"Domain-driven cluster selection ({len(reduced_features)} features): "
-              f"{reduced_features}")
+
+        # Validate one-per-cluster constraint
+        feature_to_cluster = {}
+        for cid, feat_ids in cluster_id_to_feature_ids.items():
+            for fid in feat_ids:
+                feature_to_cluster[X.columns[fid]] = cid
+
+        violations = {}
+        for feat in domain_features:
+            cid = feature_to_cluster[feat]
+            cluster_members = [X.columns[fid]
+                               for fid in cluster_id_to_feature_ids[cid]]
+            co_selected = [
+                f for f in cluster_members
+                if f in domain_features and f != feat
+            ]
+            if co_selected:
+                violations[feat] = co_selected
+
+        if violations:
+            msg = "\n".join(
+                f"  '{f}' shares a cluster with: {co}"
+                for f, co in violations.items()
+            )
+            raise ValueError(
+                f"--domain-features violates the one-per-cluster constraint at "
+                f"--cluster-threshold {dist_thresh}:\n{msg}\n"
+                f"Adjust --domain-features or --cluster-threshold to resolve."
+            )
+
+        reduced_features = domain_features
+        ordered = [f for i in dendrogram_order
+                   if (f := X.columns[i]) in reduced_features]
+        print(f"Domain-driven cluster selection ({len(reduced_features)} features, "
+              f"dendrogram order): {ordered}")
 
     tick_labels = [item.get_text() for item in ax.get_yticklabels()]
     annotated   = [f'*{l}' if l in reduced_features else l for l in tick_labels]
@@ -553,7 +594,7 @@ def analyze_feature_importance(
         Reduced-feature nested-CV results with ``final_model`` entries, as
         produced by the ``reduced`` mode of this script.
     all_features : list of str
-        Full list of feature names (all 39), used to look up cluster companions.
+        Full list of feature names, used to look up cluster companions.
     reduced_features : list of str
         The selected representative feature subset.
     cluster_id_to_feature_ids : dict
@@ -640,12 +681,15 @@ def analyze_feature_importance(
         feat_imp_df.sort_values(['median_rank', 'rank_std']), 1
     )
 
+    # Annotate with cluster companions; break after first match since each
+    # feature belongs to exactly one cluster.
     for rfeat in feat_imp_df.index:
         for key, val in cluster_id_to_feature_ids.items():
             cluster_names = [all_features[v] for v in val]
             if rfeat in cluster_names:
                 companions = [n for n in cluster_names if n != rfeat]
                 feat_imp_df.loc[rfeat, 'related features'] = ', '.join(companions)
+                break
 
     feat_imp_df.to_csv(
         os.path.join(
@@ -745,7 +789,7 @@ def parse_args():
             'Feature importance analysis for the landscape-evolution ML framework.\n\n'
             'Three modes are available via --mode:\n'
             '  explore    Analyse inter-feature correlations and produce a\n'
-            '             dendrogram.  No models required.\n'
+            '             dendrogram.  Clustering uses the training subset only.\n'
             '  reduced    Full pipeline: clustering, nested CV on reduced\n'
             '             features, full-vs-reduced comparison, and permutation\n'
             '             importance.\n'
@@ -761,10 +805,9 @@ def parse_args():
         required=True,
         help=(
             'Directory containing features-{job_id}.pkl files produced by '
-            '02_extract_features.py.  Required in all modes: in explore mode '
-            'features are loaded for correlation analysis; in reduced and '
-            'importance modes features are loaded to reconstruct the train/test '
-            'split for model training and importance evaluation.'
+            '02_extract_features.py.  Required in all modes: features are '
+            'loaded for clustering in explore and reduced modes, and to '
+            'reconstruct the train/test split for importance evaluation.'
         ),
     )
     p.add_argument(
@@ -777,16 +820,16 @@ def parse_args():
     )
     p.add_argument(
         '--models-pkl',
-        default=None,
+        required=True,
         help=(
-            'Path to an existing results pkl file.  '
+            'Path to an existing results pkl file.  Required for all modes.\n'
+            'In explore mode: provides the authoritative feature_names list '
+            'and train_idx for clustering on the training subset.\n'
             'In reduced mode: must point to the FULL-feature results pkl '
             'produced by 03_train_models.py.  Train/test split indices, label '
-            'names, and random state are inherited from its _meta.  '
+            'names, and random state are inherited from its _meta.\n'
             'In importance mode: must point to the REDUCED-feature results pkl '
-            'produced by a previous reduced run of this script.  '
-            'Not used in explore mode.  '
-            'Required for reduced and importance modes.'
+            'produced by a previous reduced run of this script.'
         ),
     )
     p.add_argument(
@@ -796,7 +839,7 @@ def parse_args():
             'Output path for the reduced-feature results pkl produced in '
             'reduced mode.  The pkl stores nested-CV results, final fitted '
             'models, and _meta (label names, split indices, git hash, CV '
-            'parameters, cluster selection method).  '
+            'parameters, cluster selection method, domain features).  '
             'Required when --mode reduced is set.'
         ),
     )
@@ -808,7 +851,7 @@ def parse_args():
         default='importance',
         help=(
             'Analysis mode (default: importance).  '
-            'explore: correlation analysis and dendrogram only, no models needed.  '
+            'explore: correlation analysis and dendrogram only.  '
             'reduced: full pipeline from clustering through to permutation '
             'importance, requires --models-pkl (full-feature) and '
             '--reduced-models-pkl (output path).  '
@@ -834,9 +877,10 @@ def parse_args():
         help=(
             'Git hash suffix of the feature pkl files to load '
             '(e.g. abc1234 matches features-{job_id}-abc1234.pkl).  '
+            'Inherited from --models-pkl _meta when available.  '
             'Required only when --features-dir contains multiple versioned '
-            'feature files with different hash suffixes.  If the directory '
-            'contains a single version, this argument can be omitted.'
+            'feature files with different hash suffixes and the pkl _meta '
+            'does not store features_hash.'
         ),
     )
 
@@ -861,12 +905,27 @@ def parse_args():
         help=(
             'Method for selecting one representative feature per cluster '
             '(default: domain).  '
-            'domain: use the hand-picked DOMAIN_REDUCED_FEATURES list, which '
-            'prioritises physically interpretable and easily computed features.  '
+            'domain: use the list supplied via --domain-features.  The list is '
+            'validated against the clustering result at --cluster-threshold; '
+            'an error is raised if any two selected features share a cluster.  '
             'random: draw one feature per cluster uniformly at random, seeded '
             'by --random-state.  Fully reproducible but not guided by domain '
             'knowledge.  '
             'Only used in explore and reduced modes.'
+        ),
+    )
+    p.add_argument(
+        '--domain-features',
+        nargs='+',
+        default=None,
+        help=(
+            'Whitespace-separated list of representative features to use when '
+            '--cluster-selection domain is set.  Each feature must be present '
+            'in the loaded feature set.  The list is validated against the '
+            'clustering result at --cluster-threshold to ensure no two selected '
+            'features share a cluster.  '
+            'Required when --cluster-selection domain is set in explore or '
+            'reduced modes.  Stored in the reduced pkl _meta for reproducibility.'
         ),
     )
 
@@ -909,10 +968,12 @@ def parse_args():
     args = p.parse_args()
 
     # ── Argument validation ────────────────────────────────────────────────────
-    if args.models_pkl is None:
-        p.error("--models-pkl is required for all modes")
     if args.mode == 'reduced' and args.reduced_models_pkl is None:
         p.error("--mode reduced requires --reduced-models-pkl")
+    if (args.mode in ('explore', 'reduced')
+            and args.cluster_selection == 'domain'
+            and args.domain_features is None):
+        p.error("--cluster-selection domain requires --domain-features")
 
     return args
 
@@ -927,10 +988,10 @@ def main():
     git_hash = _git_hash()
 
     # ── Load models pkl (all modes) ───────────────────────────────────────────
-    # --models-pkl is required for all modes. In explore mode it provides the
-    # authoritative feature_names list; in reduced mode it provides the
-    # full-feature results; in importance mode it provides the reduced-feature
-    # results.
+    # --models-pkl is required for all modes.  In explore mode it provides the
+    # authoritative feature_names list and train_idx for clustering on the
+    # training subset; in reduced mode it provides the full-feature results;
+    # in importance mode it provides the reduced-feature results.
     print(f"\nLoading models pkl: {args.models_pkl}")
     with open(args.models_pkl, 'rb') as fh:
         results = pickle.load(fh)
@@ -941,6 +1002,11 @@ def main():
             f"Models pkl _meta has no feature_names: {args.models_pkl}\n"
             f"Cannot determine feature set."
         )
+    if not (meta.get('train_idx') and meta.get('test_idx')):
+        raise ValueError(
+            f"Models pkl _meta is missing train_idx or test_idx: {args.models_pkl}\n"
+            f"Cannot reconstruct train/test split."
+        )
 
     # ── Load features ──────────────────────────────────────────────────────────
     df = load_features(
@@ -949,26 +1015,32 @@ def main():
         features_hash=meta.get('features_hash', args.features_hash),
     )
 
+    train_idx = meta['train_idx']
+    test_idx  = meta['test_idx']
+
     # ── EXPLORE mode ───────────────────────────────────────────────────────────
     if args.mode == 'explore':
         print("\n── Mode: explore ──")
-        # Use feature_names from _meta to select only feature columns,
-        # avoiding contamination from label or metadata columns in df.
+        # Use feature_names from _meta and restrict to the training subset to
+        # match the clustering behaviour of reduced mode exactly.
         feature_names = meta['feature_names']
-        X = df[feature_names]
-        print(f"Features : {X.shape[1]} columns, {X.shape[0]:,} samples")
+        X_train = df[feature_names].loc[train_idx]
+        print(f"Features : {X_train.shape[1]} columns, "
+              f"{X_train.shape[0]:,} training samples")
         get_feature_clusters(
-            X,
+            X_train,
             dist_thresh=args.cluster_threshold,
             output_dir=args.output_dir,
             git_hash=git_hash,
             label_tag='explore',
             cluster_selection=args.cluster_selection,
+            domain_features=args.domain_features,
             random_state=args.random_state,
         )
         print(f"\nDendrogram saved to {args.output_dir}")
         return
 
+    # ── Shared setup for reduced and importance modes ──────────────────────────
     if not meta.get('label_names'):
         raise ValueError(
             f"Models pkl has no label_names in _meta: {args.models_pkl}\n"
@@ -978,26 +1050,16 @@ def main():
     print(f"  label_names  : {label_names}")
     print(f"  git_hash     : {meta.get('git_hash')}")
     print(f"  random_state : {meta.get('random_state')}")
-    print(f"  train/test   : {len(meta.get('train_idx', []))}"
-          f" / {len(meta.get('test_idx', []))}")
+    print(f"  train/test   : {len(train_idx)} / {len(test_idx)}")
 
     label_tag         = '-'.join(label_names)
     random_state_meta = meta.get('random_state', args.random_state)
 
-    # ── Split features and labels ──────────────────────────────────────────────
     X, y = split_features_labels(df, label_names)
-    all_features = list(X.columns)   # full feature set for cluster annotation
+    all_features = list(X.columns)
     print(f"\nFeatures : {len(all_features)} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
 
-    # Reconstruct train/test split from _meta indices
-    if not (meta.get('train_idx') and meta.get('test_idx')):
-        raise ValueError(
-            f"Models pkl _meta is missing train_idx or test_idx: {args.models_pkl}\n"
-            f"Cannot reconstruct train/test split."
-        )
-    train_idx = meta['train_idx']
-    test_idx  = meta['test_idx']
     X_train, X_test = X.loc[train_idx], X.loc[test_idx]
     y_train, y_test = y.loc[train_idx], y.loc[test_idx]
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
@@ -1006,7 +1068,7 @@ def main():
     if args.mode == 'reduced':
         print("\n── Mode: reduced ──")
 
-        # 1. Feature clustering
+        # 1. Feature clustering on training set only
         reduced_features, cluster_id_to_feature_ids = get_feature_clusters(
             X_train,
             dist_thresh=args.cluster_threshold,
@@ -1014,28 +1076,42 @@ def main():
             git_hash=git_hash,
             label_tag=label_tag,
             cluster_selection=args.cluster_selection,
+            domain_features=args.domain_features,
             random_state=args.random_state,
         )
         X_train_red = X_train[reduced_features]
         X_test_red  = X_test[reduced_features]
 
         # 2. Nested CV on reduced features
-        # n_outer, n_inner, n_iter inherited from full-feature _meta
-        n_outer = meta.get('n_outer_splits', 10)
-        n_inner = meta.get('n_inner_splits', 5)
-        n_iter  = meta.get('n_iter', 20)
-        print(f"\nNested CV: n_outer={n_outer}, n_inner={n_inner}, n_iter={n_iter}")
+        # n_outer, n_inner, n_iter inherited from full-feature _meta where
+        # available; warn if absent (pre-dates storing these in _meta).
+        n_outer = meta.get('n_outer_splits')
+        n_inner = meta.get('n_inner_splits')
+        n_iter  = meta.get('n_iter')
+        if any(v is None for v in [n_outer, n_inner, n_iter]):
+            print(
+                "WARNING: one or more CV parameters (n_outer_splits, "
+                "n_inner_splits, n_iter) not found in pkl _meta.  "
+                "nested_cv() function defaults will be used.  "
+                "Re-run 03_train_models.py to store these values explicitly."
+            )
+        cv_kwargs = {}
+        if n_outer is not None:
+            cv_kwargs['n_outer_splits'] = n_outer
+        if n_inner is not None:
+            cv_kwargs['n_inner_splits'] = n_inner
+        if n_iter is not None:
+            cv_kwargs['n_iter'] = n_iter
+        print(f"\nNested CV kwargs: {cv_kwargs}")
 
         red_results = nested_cv(
             X_train_red, y_train,
-            n_outer_splits=n_outer,
-            n_inner_splits=n_inner,
             random_state=random_state_meta,
-            n_iter=n_iter,
+            **cv_kwargs,
         )
         red_results['_meta'] = {
-            'feature_names':         list(X_train.columns),        # full feature set
-            'reduced_feature_names': list(X_train_red.columns),    # reduced subset
+            'feature_names':         list(X_train.columns),     # full feature set
+            'reduced_feature_names': list(X_train_red.columns), # reduced subset
             'label_names':           list(y_train.columns),
             'job_ids':               sorted(df['job_id'].unique().tolist()),
             'train_idx':             list(X_train_red.index),
@@ -1045,7 +1121,9 @@ def main():
             'n_inner_splits':        n_inner,
             'n_iter':                n_iter,
             'git_hash':              git_hash,
+            'cluster_threshold':     args.cluster_threshold,
             'cluster_selection':     args.cluster_selection,
+            'domain_features':       args.domain_features,
             'full_models_pkl':       args.models_pkl,
         }
 
@@ -1101,19 +1179,19 @@ def main():
                 f"Re-run with --mode reduced to generate a valid reduced-feature pkl."
             )
 
-        # Re-run clustering on the FULL feature set to recover
+        # Re-run clustering on the FULL training feature set to recover
         # cluster_id_to_feature_ids for companion annotation in the importance
         # table.  Clustering parameters are taken from _meta to ensure
         # consistency with the original reduced run.
-        # feature_names in _meta is always the full set (consistent with 03).
         X_train_full = X_train[meta['feature_names']]
         _, cluster_id_to_feature_ids = get_feature_clusters(
             X_train_full,
-            dist_thresh=args.cluster_threshold,
+            dist_thresh=meta.get('cluster_threshold', args.cluster_threshold),
             output_dir=args.output_dir,
             git_hash=git_hash,
             label_tag=label_tag,
             cluster_selection=meta.get('cluster_selection', args.cluster_selection),
+            domain_features=meta.get('domain_features', args.domain_features),
             random_state=args.random_state,
         )
         X_train_red = X_train[reduced_features]
