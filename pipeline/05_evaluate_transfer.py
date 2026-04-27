@@ -1,33 +1,38 @@
 """
 05_evaluate_transfer.py
 =======================
-Within-domain and cross-domain transfer evaluation for steady-state (SS)
-and transient (TR) landscape evolution ML models.
+Within-domain and cross-domain transfer evaluation for steady-state (SS),
+transient (TR), and optionally mixed-domain (MX) landscape evolution ML
+models.
 
 Assumptions
 -----------
-- SS and TR models and features were produced under identical conditions
-  (same feature set, label set, train/test split logic) except for the
-  landscape regime (steady-state vs. transient). The _meta dicts of the
-  SS and TR nested-CV results must agree on all shared keys; an error is
-  raised otherwise.
+- SS, TR, and MX models and features were produced under identical
+  conditions (same feature set, label set, train/test split logic) except
+  for the landscape regime. The _meta dicts of all bundles must agree on
+  feature_names and label_names; an error is raised otherwise.
 - The held-out test set is identified by integer indices stored in
-  _meta['test_idx'] of the nested-CV results pkl. These indices are used
+  _meta['test_idx'] of each nested-CV results pkl. These indices are used
   to slice the corresponding features dataframe.
-- Feature names and label names are read from _meta['feature_names'] and
-  _meta['label_names'] respectively (single source of truth, validated to
-  be identical across SS and TR).
+- Feature names and label names are read from _meta of the SS bundle
+  (single source of truth after validation).
 
 Evaluation conditions
 ---------------------
+  Without MX:
     SS->SS  : SS model on SS held-out test features  (within-domain)
     TR->TR  : TR model on TR held-out test features  (within-domain)
     TR->SS  : TR model on SS held-out test features  (cross-domain)
     SS->TR  : SS model on TR held-out test features  (cross-domain)
 
+  With MX (--models-mx / --features-mx supplied):
+    MX->MX  : MX model on MX held-out test features  (within-domain)
+    MX->SS  : MX model on SS held-out test features  (mixed transfer)
+    MX->TR  : MX model on TR held-out test features  (mixed transfer)
+
 Output
 ------
-A pickle file with keys 'within', 'cross', and '_meta':
+A pickle file with keys 'within', 'cross', optionally 'mixed', and '_meta':
     results[alg][condition][target] = (mean_r2, lower_ci, upper_ci)
     target is one of: 'u_ks', 'kh_ks'
 
@@ -37,10 +42,12 @@ where git_hash is read from _meta['git_hash'] of the SS model bundle.
 Usage
 -----
 python 05_evaluate_transfer.py \\
-    --models-ss  path/to/ss/nested*.pkl \\
-    --models-tr  path/to/tr/nested*.pkl \\
+    --models-ss   path/to/ss/nested*.pkl \\
+    --models-tr   path/to/tr/nested*.pkl \\
     --features-ss path/to/ss/features*.pkl \\
     --features-tr path/to/tr/features*.pkl \\
+    [--models-mx   path/to/mx/nested*.pkl] \\
+    [--features-mx path/to/mx/features*.pkl] \\
     [--n-bootstrap 1000] \\
     [--ci 95] \\
     [--seed INT] \\
@@ -90,35 +97,34 @@ def resolve_glob(pattern: str) -> Path:
 REQUIRED_MATCHING_KEYS = ["feature_names", "label_names"]
 
 
-def validate_meta(meta_ss: dict, meta_tr: dict) -> None:
+def validate_meta(meta_ref: dict, meta_other: dict, label: str) -> None:
     """
     Raise ValueError if any REQUIRED_MATCHING_KEYS differ between
-    the SS and TR _meta dicts. Raise KeyError if a required key is absent.
+    meta_ref (SS, used as reference) and meta_other.
+    Raise KeyError if a required key is absent from either.
     """
     for key in REQUIRED_MATCHING_KEYS:
-        if key not in meta_ss:
+        if key not in meta_ref:
+            raise KeyError(f"'_meta' of SS models is missing required key: '{key}'")
+        if key not in meta_other:
             raise KeyError(
-                f"'_meta' of SS models is missing required key: '{key}'"
-            )
-        if key not in meta_tr:
-            raise KeyError(
-                f"'_meta' of TR models is missing required key: '{key}'"
+                f"'_meta' of {label} models is missing required key: '{key}'"
             )
 
     mismatches = [
         key for key in REQUIRED_MATCHING_KEYS
-        if meta_ss[key] != meta_tr[key]
+        if meta_ref[key] != meta_other[key]
     ]
 
     if mismatches:
         lines = [
-            "SS and TR _meta dicts differ on required keys. "
-            "Models must be trained under identical conditions.\n"
+            f"SS and {label} _meta dicts differ on required keys. "
+            f"Models must be trained under identical conditions.\n"
         ]
         for key in mismatches:
-            lines.append(f"  Key : '{key}'")
-            lines.append(f"    SS: {meta_ss[key]}")
-            lines.append(f"    TR: {meta_tr[key]}")
+            lines.append(f"  Key   : '{key}'")
+            lines.append(f"    SS  : {meta_ref[key]}")
+            lines.append(f"    {label:4s}: {meta_other[key]}")
         raise ValueError("\n".join(lines))
 
 
@@ -268,6 +274,14 @@ def main():
         help="Path (or glob) to the TR features pkl file.",
     )
     parser.add_argument(
+        "--models-mx", default=None, metavar="PATH",
+        help="Path (or glob) to the MX nested-CV model pkl file (optional).",
+    )
+    parser.add_argument(
+        "--features-mx", default=None, metavar="PATH",
+        help="Path (or glob) to the MX features pkl file (optional).",
+    )
+    parser.add_argument(
         "--n-bootstrap", type=int, default=1000, metavar="N",
         help="Number of bootstrap resamples.",
     )
@@ -289,52 +303,83 @@ def main():
     # Load
     # ------------------------------------------------------------------
     print("Loading model bundles...")
-    path_models_ss  = resolve_glob(args.models_ss)
-    path_models_tr  = resolve_glob(args.models_tr)
+    path_models_ss   = resolve_glob(args.models_ss)
+    path_models_tr   = resolve_glob(args.models_tr)
     path_features_ss = resolve_glob(args.features_ss)
     path_features_tr = resolve_glob(args.features_tr)
 
     models_ss      = load_pickle(path_models_ss)
     models_tr      = load_pickle(path_models_tr)
 
+    # MX is optional; validate that both --models-mx and --features-mx
+    # are either both supplied or both absent.
+    use_mx = args.models_mx is not None or args.features_mx is not None
+    if use_mx and (args.models_mx is None or args.features_mx is None):
+        parser.error(
+            "--models-mx and --features-mx must be supplied together."
+        )
+
+    if use_mx:
+        path_models_mx   = resolve_glob(args.models_mx)
+        path_features_mx = resolve_glob(args.features_mx)
+        models_mx        = load_pickle(path_models_mx)
+    else:
+        path_models_mx = path_features_mx = models_mx = None
+
     print("Loading feature dataframes...")
     features_ss_df = load_pickle(path_features_ss)
     features_tr_df = load_pickle(path_features_tr)
+    features_mx_df = load_pickle(path_features_mx) if use_mx else None
 
     # ------------------------------------------------------------------
     # Validate _meta consistency
     # ------------------------------------------------------------------
-    print("Validating _meta consistency between SS and TR bundles...")
+    print("Validating _meta consistency...")
     meta_ss = models_ss["_meta"]
     meta_tr = models_tr["_meta"]
-    validate_meta(meta_ss, meta_tr)  # raises on mismatch
+    validate_meta(meta_ss, meta_tr, label="TR")
+    if use_mx:
+        meta_mx = models_mx["_meta"]
+        validate_meta(meta_ss, meta_mx, label="MX")
+    else:
+        meta_mx = None
 
     # Single source of truth for shared metadata
     feature_names = meta_ss["feature_names"]
     label_names   = meta_ss["label_names"]
     test_idx_ss   = meta_ss["test_idx"]
     test_idx_tr   = meta_tr["test_idx"]
+    test_idx_mx   = meta_mx["test_idx"] if use_mx else None
 
     print(f"  Features : {len(feature_names)}")
     print(f"  Labels   : {label_names}")
     print(f"  SS test n: {len(test_idx_ss)}")
     print(f"  TR test n: {len(test_idx_tr)}")
+    if use_mx:
+        print(f"  MX test n: {len(test_idx_mx)}")
 
     # ------------------------------------------------------------------
     # Reconcile algorithms
     # ------------------------------------------------------------------
     algs_ss = set(get_algorithms(models_ss))
     algs_tr = set(get_algorithms(models_tr))
-    if algs_ss != algs_tr:
-        only_ss = algs_ss - algs_tr
-        only_tr = algs_tr - algs_ss
-        if only_ss:
-            print(f"WARNING: algorithms only in SS bundle: {sorted(only_ss)}",
-                  file=sys.stderr)
-        if only_tr:
-            print(f"WARNING: algorithms only in TR bundle: {sorted(only_tr)}",
-                  file=sys.stderr)
-    algorithms = sorted(algs_ss & algs_tr)
+    all_alg_sets = {"SS": algs_ss, "TR": algs_tr}
+    if use_mx:
+        algs_mx = set(get_algorithms(models_mx))
+        all_alg_sets["MX"] = algs_mx
+    else:
+        algs_mx = algs_ss  # unused, set for intersection logic
+
+    common = algs_ss & algs_tr & (algs_mx if use_mx else algs_ss)
+    for domain, alg_set in all_alg_sets.items():
+        only_this = alg_set - common
+        if only_this:
+            print(
+                f"WARNING: algorithms only in {domain} bundle: "
+                f"{sorted(only_this)}",
+                file=sys.stderr,
+            )
+    algorithms = sorted(common)
     print(f"  Algorithms: {algorithms}")
 
     # ------------------------------------------------------------------
@@ -346,11 +391,15 @@ def main():
     X_tr, y_tr = get_test_arrays(
         features_tr_df, test_idx_tr, feature_names, label_names,
     )
+    if use_mx:
+        X_mx, y_mx = get_test_arrays(
+            features_mx_df, test_idx_mx, feature_names, label_names,
+        )
 
     rng = np.random.default_rng(args.seed)
 
     # ------------------------------------------------------------------
-    # Within-domain evaluation
+    # Within-domain evaluation  (SS->SS, TR->TR, and optionally MX->MX)
     # ------------------------------------------------------------------
     print(f"\nRunning within-domain evaluation "
           f"(n_bootstrap={args.n_bootstrap}, CI={args.ci}%)...")
@@ -368,10 +417,15 @@ def main():
                 X_tr, y_tr, args.n_bootstrap, args.ci, rng,
             ),
         }
+        if use_mx:
+            results_within[alg]["mx_on_mx"] = evaluate_condition(
+                models_mx[alg]["final_model"]["regressor"],
+                X_mx, y_mx, args.n_bootstrap, args.ci, rng,
+            )
         print("done")
 
     # ------------------------------------------------------------------
-    # Cross-domain evaluation
+    # Cross-domain evaluation  (TR->SS, SS->TR)
     # ------------------------------------------------------------------
     print(f"\nRunning cross-domain evaluation "
           f"(n_bootstrap={args.n_bootstrap}, CI={args.ci}%)...")
@@ -392,16 +446,39 @@ def main():
         print("done")
 
     # ------------------------------------------------------------------
+    # Mixed transfer evaluation  (MX->SS, MX->TR)
+    # ------------------------------------------------------------------
+    results_mixed = {}
+    if use_mx:
+        print(f"\nRunning mixed-domain transfer evaluation "
+              f"(n_bootstrap={args.n_bootstrap}, CI={args.ci}%)...")
+        for alg in algorithms:
+            print(f"  {alg}...", end=" ", flush=True)
+            results_mixed[alg] = {
+                "mx_on_ss": evaluate_condition(
+                    models_mx[alg]["final_model"]["regressor"],
+                    X_ss, y_ss, args.n_bootstrap, args.ci, rng,
+                ),
+                "mx_on_tr": evaluate_condition(
+                    models_mx[alg]["final_model"]["regressor"],
+                    X_tr, y_tr, args.n_bootstrap, args.ci, rng,
+                ),
+            }
+            print("done")
+
+    # ------------------------------------------------------------------
     # Print summaries
     # ------------------------------------------------------------------
     print_results(results_within, "WITHIN-DOMAIN RESULTS")
     print_results(results_cross,  "CROSS-DOMAIN RESULTS")
+    if use_mx:
+        print_results(results_mixed, "MIXED TRANSFER RESULTS (MX->SS, MX->TR)")
 
     # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
     git_hash = meta_ss["git_hash"]
-    
+
     output = {
         "within": results_within,
         "cross":  results_cross,
@@ -421,8 +498,14 @@ def main():
             "features_tr":   str(path_features_tr),
         },
     }
+    if use_mx:
+        output["mixed"] = results_mixed
+        output["_meta"].update({
+            "test_idx_mx": test_idx_mx,
+            "models_mx":   str(path_models_mx),
+            "features_mx": str(path_features_mx),
+        })
 
-    
     out_dir  = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"transfer-{git_hash}.pkl"
