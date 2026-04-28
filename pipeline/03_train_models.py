@@ -32,6 +32,19 @@ Usage
 
     # Skip nested CV; re-run final-model and plots from an existing pickle
     python 03_train_models.py --skip-cv --results-pkl outputs/nested-cv-results-full-u_ks-kh_ks-abc1234.pkl --labels u_ks kh_ks
+
+    # Train on instantaneous erosion rate (log-transformed, default)
+    python 03_train_models.py \\
+        --data-dir data/features --output-dir outputs \\
+        --labels erosion_rate \\
+        --erosion-rates-pkl outputs/erosion_rates/erosion_rates-all-abc1234.pkl
+
+    # Train on cumulative erosion WITHOUT log transform
+    python 03_train_models.py \\
+        --data-dir data/features --output-dir outputs \\
+        --labels cumulative_erosion \\
+        --erosion-rates-pkl outputs/erosion_rates/erosion_rates-all-abc1234.pkl \\
+        --no-log-erosion
 """
 
 import argparse
@@ -49,6 +62,131 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from display_labels import TARGET_DISPLAY as _TARGET_DISPLAY
 from ml_core import nested_cv, train_final_model
 from pipeline_utils import _git_hash, load_features, split_features_labels
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Erosion label column names produced by 01c_compute_erosion_rates.py.
+# Joined from the erosion_rates pkl before training; excluded from X via
+# explicit drop below. Update pipeline_utils._NON_FEATURE_COLS to include
+# these once erosion training is fully integrated.
+EROSION_LABEL_COLS = {'erosion_rate', 'cumulative_erosion'}
+
+# Symbolic label tags used in output filenames.
+# Keys are (column_name, log_transformed) tuples.
+_LABEL_TAG = {
+    ('u_ks',              True):  'logU_Ks',
+    ('kh_ks',             True):  'logKh_Ks',
+    ('u',                 True):  'logU',
+    ('kh',                True):  'logKh',
+    ('ks',                True):  'logKs',
+    ('erosion_rate',      True):  'logE',
+    ('erosion_rate',      False): 'E',
+    ('cumulative_erosion',True):  'logCumE',
+    ('cumulative_erosion',False): 'cumE',
+}
+
+
+def make_label_tag(label_cols, log_transform_map):
+    """Build the label tag string for output filenames.
+
+    Parameters
+    ----------
+    label_cols : list of str
+        Active training target column names.
+    log_transform_map : dict
+        Maps each column name to bool indicating whether log10 was applied.
+
+    Returns
+    -------
+    str
+        Hyphen-joined symbolic tags, e.g. 'logU_Ks-logKh_Ks' or 'logE'.
+    """
+    tags = []
+    for col in label_cols:
+        logged = log_transform_map.get(col, True)
+        tag = _LABEL_TAG.get((col, logged), col)
+        tags.append(tag)
+    return '-'.join(tags)
+
+
+# =============================================================================
+# Erosion label join
+# =============================================================================
+
+def join_erosion_labels(df, erosion_rates_pkl):
+    """Join erosion rate labels from erosion_rates pkl onto the features DataFrame.
+
+    Reads the wide-format erosion_rates-*.pkl produced by
+    01c_compute_erosion_rates.py (one row per landscape, array columns
+    ts_erosion_rates and ts_cumulative_erosion). For each row in df, extracts
+    the scalar erosion rate and cumulative erosion at the row's ts_index and
+    appends them as columns erosion_rate and cumulative_erosion.
+
+    Rows where ts_index=0 are dropped (ts_erosion_rates[0] is NaN by
+    construction -- no prior state for forward difference).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Features DataFrame from load_features(). Must have columns
+        job_id, landscape_idx, ts_index.
+    erosion_rates_pkl : str
+        Path to erosion_rates-*.pkl from 01c_compute_erosion_rates.py.
+
+    Returns
+    -------
+    pd.DataFrame
+        df with erosion_rate and cumulative_erosion columns added,
+        ts_index=0 rows removed.
+    """
+    df_er = pd.read_pickle(erosion_rates_pkl)
+
+    required = {'job_id', 'landscape_idx', 'ts_erosion_rates',
+                'ts_cumulative_erosion'}
+    missing = required - set(df_er.columns)
+    if missing:
+        raise KeyError(
+            f"erosion_rates pkl is missing column(s): {sorted(missing)}. "
+            f"Columns present: {df_er.columns.tolist()}"
+        )
+
+    n_before = len(df)
+    df = df[df['ts_index'] != 0].copy()
+    n_dropped = n_before - len(df)
+    if n_dropped > 0:
+        print(f"  join_erosion_labels: dropped {n_dropped} row(s) with "
+              f"ts_index=0 (no erosion rate defined).")
+
+    df = df.merge(
+        df_er[['job_id', 'landscape_idx', 'ts_erosion_rates',
+               'ts_cumulative_erosion']],
+        on=['job_id', 'landscape_idx'],
+        how='left',
+    )
+
+    n_unmatched = df['ts_erosion_rates'].isna().sum()
+    if n_unmatched > 0:
+        raise ValueError(
+            f"{n_unmatched} row(s) in features pkl could not be matched to "
+            f"erosion_rates pkl on (job_id, landscape_idx). "
+            f"Check that the same params pkl files underlie both outputs."
+        )
+
+    df['erosion_rate'] = df.apply(
+        lambda r: r['ts_erosion_rates'][r['ts_index']], axis=1
+    )
+    df['cumulative_erosion'] = df.apply(
+        lambda r: r['ts_cumulative_erosion'][r['ts_index']], axis=1
+    )
+    df = df.drop(columns=['ts_erosion_rates', 'ts_cumulative_erosion'])
+
+    print(f"  join_erosion_labels: {len(df)} rows after join "
+          f"(erosion_rate range: "
+          f"{df['erosion_rate'].min():.3e} -- {df['erosion_rate'].max():.3e} m/yr).")
+    return df
 
 
 # =============================================================================
@@ -73,6 +211,7 @@ def evaluate_final_models(
     output_dir: str,
     git_hash: str,
     label_tag: str,
+    log_targets: set = None,
     figure_width_cm: float = 14.0,
 ) -> dict:
     """Train final models and produce predicted-vs-true figures.
@@ -84,15 +223,21 @@ def evaluate_final_models(
     ----------
     X_train, y_train : training data
     X_test, y_test   : held-out test data (never seen during CV)
-    results : dict   — output of ``nested_cv()``; mutated in-place
+    results : dict   -- output of ``nested_cv()``; mutated in-place
     output_dir : str
     git_hash : str
+    label_tag : str
+    log_targets : set of str, optional
+        Target column names that were log10-transformed. Controls whether
+        axis labels are prefixed with "log". If None, all targets assumed logged.
     figure_width_cm : float
 
     Returns
     -------
     results : dict  (updated with ``'final_model'`` key per algorithm)
     """
+    if log_targets is None:
+        log_targets = set(y_train.columns)
     labels = y_train.columns
     fw     = figure_width_cm / 2.54
 
@@ -146,8 +291,9 @@ def evaluate_final_models(
             # Predicted vs true
             ax_m[t_idx, 0].plot(y_p, y_t, **scatter_kw)
             ax_m[t_idx, 0].plot(lims, lims, ls=':', c='k', label='1:1')
-            ax_m[t_idx, 0].set_xlabel(f'predicted log {display}', fontsize=fs_ax)
-            ax_m[t_idx, 0].set_ylabel(f'true log {display}', fontsize=fs_ax)
+            _pfx = 'log ' if col in log_targets else ''
+            ax_m[t_idx, 0].set_xlabel(f'predicted {_pfx}{display}', fontsize=fs_ax)
+            ax_m[t_idx, 0].set_ylabel(f'true {_pfx}{display}', fontsize=fs_ax)
             ax_m[t_idx, 0].tick_params(labelsize=fs_ax)
             ax_m[t_idx, 0].text(0.05, 0.95, reg_name, fontsize=9, va='top',
                                  transform=ax_m[t_idx, 0].transAxes)
@@ -158,8 +304,8 @@ def evaluate_final_models(
             # Residuals
             ax_m[t_idx, 1].plot(y_p, y_t - y_p, **scatter_kw)
             ax_m[t_idx, 1].axhline(0, ls=':', c='k')
-            ax_m[t_idx, 1].set_xlabel(f'predicted log {display}', fontsize=fs_ax)
-            ax_m[t_idx, 1].set_ylabel(f'residual log {display}', fontsize=fs_ax)
+            ax_m[t_idx, 1].set_xlabel(f'predicted {_pfx}{display}', fontsize=fs_ax)
+            ax_m[t_idx, 1].set_ylabel(f'residual {_pfx}{display}', fontsize=fs_ax)
             ax_m[t_idx, 1].tick_params(labelsize=fs_ax)
 
             # Add to per-target comparison canvas
@@ -203,6 +349,7 @@ def plot_nested_cv_results(
     output_dir: str,
     git_hash: str,
     label_tag: str,
+    log_targets: set = None,
     figure_width_cm: float = 14.0,
     box: bool = True,
 ):
@@ -215,8 +362,13 @@ def plot_nested_cv_results(
     output_dir : str
     git_hash : str
     figure_width_cm : float
-    box : bool — True → box plots, False → scatter + mean marker
+    box : bool -- True: box plots, False: scatter + mean marker
+    log_targets : set of str, optional
+        Target column names that were log10-transformed. Controls
+        panel label prefixes. If None, all targets assumed logged.
     """
+    if log_targets is None:
+        log_targets = set(y.columns)
     fw   = figure_width_cm / 2.54
     col0 = [k for k in results.keys() if k != '_meta']
     col1 = ['r2', 'rmse', 'mae']
@@ -277,8 +429,12 @@ def plot_nested_cv_results(
             ax.tick_params(axis='both', labelsize=7)
             ax.tick_params(axis='x', rotation=60)
 
-            text = ('mean' if c2 == 'mean'
-                    else f'log {_target_label(y.columns[c2])}')
+            if c2 == 'mean':
+                text = 'mean'
+            else:
+                col_name = y.columns[c2]
+                _pfx = 'log ' if col_name in log_targets else ''
+                text = f'{_pfx}{_target_label(col_name)}'
             ha = 'left' if c1 == 'r2' else 'right'
             tx = 0.05   if c1 == 'r2' else 0.95
             ax.text(tx, 0.98, text, va='top', ha=ha,
@@ -331,6 +487,15 @@ def parse_args():
                    help='Skip nested CV; load existing pickle for plotting.')
     p.add_argument('--results-pkl',  default=None,
                    help='Path to existing results pickle (used with --skip-cv).')
+    p.add_argument('--erosion-rates-pkl', default=None,
+                   help='Path to erosion_rates-*.pkl from '
+                        '01c_compute_erosion_rates.py. Required when --labels '
+                        'includes erosion_rate or cumulative_erosion.')
+    p.add_argument('--no-log-erosion', action='store_true',
+                   help='Skip log10 transform for erosion label columns '
+                        '(erosion_rate, cumulative_erosion). LE parameter '
+                        'labels are always log-transformed regardless of '
+                        'this flag.')
     return p.parse_args()
 
 
@@ -346,9 +511,61 @@ def main():
     # 1. Load data
     df = load_features(args.data_dir, job_ids=args.job_ids,
                        features_hash=args.features_hash)
+
+    # 1a. Join erosion labels if any erosion target is requested
+    erosion_labels = [c for c in args.labels if c in EROSION_LABEL_COLS]
+    if erosion_labels:
+        if args.erosion_rates_pkl is None:
+            raise ValueError(
+                f"--erosion-rates-pkl is required when --labels includes "
+                f"{erosion_labels}."
+            )
+        df = join_erosion_labels(df, args.erosion_rates_pkl)
+
+        # Guard: drop rows with non-positive erosion values before log-transform
+        if not args.no_log_erosion:
+            import warnings
+            for col in erosion_labels:
+                n_nonpos = (df[col] <= 0).sum()
+                if n_nonpos > 0:
+                    warnings.warn(
+                        f"{n_nonpos} row(s) have {col} <= 0 and will be "
+                        f"dropped before log10 transform."
+                    )
+                    df = df[df[col] > 0].copy()
+
+    # 1b. Build log_transform map: keys are active label columns only
+    #     LE parameter labels are always logged; erosion labels respect the flag
+    log_transform_map = {
+        col: (False if (col in EROSION_LABEL_COLS and args.no_log_erosion)
+              else True)
+        for col in args.labels
+    }
+
+    # 1c. Split features and labels (split_features_labels applies log10 to all)
     X, y = split_features_labels(df, args.labels)
+
+    # Drop erosion label columns leaked into X (pipeline_utils._NON_FEATURE_COLS
+    # does not yet include EROSION_LABEL_COLS; remove once updated).
+    leaked = [c for c in EROSION_LABEL_COLS if c in X.columns]
+    if leaked:
+        X = X.drop(columns=leaked)
+
+    # 1d. Undo log10 for erosion labels where --no-log-erosion is set
+    log_targets = {col for col, logged in log_transform_map.items() if logged}
+    if erosion_labels and args.no_log_erosion:
+        for col in erosion_labels:
+            if col in y.columns:
+                y[col] = df.loc[y.index, col].values   # restore raw values
+        print(f"  Log10 transform skipped for: {erosion_labels}")
+
+    # 1e. Build label_tag from symbolic names encoding transform status
+    label_tag = make_label_tag(args.labels, log_transform_map)
+
     print(f"\nFeatures : {X.shape[1]} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
+    print(f"Label tag: {label_tag}")
+    print(f"Log-transformed: {sorted(log_targets)}")
 
     # 2. Train / test split (deterministic tail split)
     n_test  = max(1, int(len(df) * args.test_fraction))
@@ -358,7 +575,6 @@ def main():
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
 
     # 3. Nested CV
-    label_tag = '-'.join(args.labels)
     pkl_path  = args.results_pkl or os.path.join(
         args.output_dir, f'nested-cv-results-full-{label_tag}-{git_hash}.pkl'
     )
@@ -395,8 +611,11 @@ def main():
             'n_inner_splits': args.n_inner,
             'n_iter':         args.n_iter,
             'random_state':   args.random_state,
-            'git_hash':       git_hash,
-            'features_hash':  args.features_hash,
+            'git_hash':           git_hash,
+            'features_hash':      args.features_hash,
+            'label_tag':          label_tag,
+            'log_transform':      log_transform_map,
+            'erosion_rates_pkl':  args.erosion_rates_pkl,
         }
         with open(pkl_path, 'wb') as fh:
             pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
@@ -404,14 +623,17 @@ def main():
 
     # 4. Plot CV results
     plt.close('all')
-    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, label_tag, box=False)
-    plot_nested_cv_results(results, y_train, args.output_dir, git_hash, label_tag, box=True)
+    plot_nested_cv_results(results, y_train, args.output_dir, git_hash,
+                           label_tag, log_targets=log_targets, box=False)
+    plot_nested_cv_results(results, y_train, args.output_dir, git_hash,
+                           label_tag, log_targets=log_targets, box=True)
 
     # 5. Train final models; evaluate on held-out test set
     plt.close('all')
     results = evaluate_final_models(
         X_train, y_train, X_test, y_test,
         results, args.output_dir, git_hash, label_tag,
+        log_targets=log_targets,
     )
     with open(pkl_path, 'wb') as fh:
         pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)
