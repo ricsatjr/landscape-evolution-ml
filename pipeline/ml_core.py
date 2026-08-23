@@ -43,8 +43,13 @@ from sklearn.tree import DecisionTreeRegressor
 # Hyperparameter search spaces
 # =============================================================================
 
-def get_random_search_params() -> dict:
+def get_random_search_params(random_state: int = 42) -> dict:
     """Return hyperparameter search spaces for all eight algorithms.
+    
+    random_state : int
+        Seed passed to estimators with stochastic fitting behaviour
+        (``dtr``, ``rfo``, ``gbs``, ``mlp``).  The remaining four algorithms
+        are deterministic and take no seed.
 
     Returns
     -------
@@ -136,10 +141,10 @@ def get_random_search_params() -> dict:
         'lso': (MultiTaskLasso(),            mtlasso_params),
         'knn': (KNeighborsRegressor(),       kn_params),
         'svm': (SVR(max_iter=int(10e4)),     svr_params),
-        'dtr': (DecisionTreeRegressor(),     dt_params),
-        'rfo': (RandomForestRegressor(),     rf_params),
-        'gbs': (GradientBoostingRegressor(), gb_params),
-        'mlp': (MLPRegressor(verbose=False), mlp_params),
+        'dtr': (DecisionTreeRegressor(random_state=random_state),     dt_params),
+        'rfo': (RandomForestRegressor(random_state=random_state),     rf_params),
+        'gbs': (GradientBoostingRegressor(random_state=random_state), gb_params),
+        'mlp': (MLPRegressor(verbose=False,random_state=random_state), mlp_params),
     }
 
 
@@ -235,7 +240,7 @@ def nested_cv(
         per-fold and summary metrics, best hyperparameters per fold, and
         per-target breakdowns.
     """
-    models  = get_random_search_params()
+    models  = get_random_search_params(random_state=random_state)
     toolkit = MultiOutputRegressionToolkit(models)
     results = {}
 
@@ -392,6 +397,7 @@ def train_final_model(
     y_train: pd.DataFrame,
     X_test: pd.DataFrame,
     y_test: pd.DataFrame,
+    random_state: int = 42,
 ) -> dict:
     """Fit a final pipeline for one algorithm and return metrics.
 
@@ -421,7 +427,7 @@ def train_final_model(
         ``test_set_rmse``    — per-target RMSE + overall (last element)
         ``test_set_mae``     — per-target MAE + overall (last element)
     """
-    models  = get_random_search_params()
+    models  = get_random_search_params(random_state=random_state)
     toolkit = MultiOutputRegressionToolkit(models)
 
     final_params, method = select_final_hyperparameters(reg_results)

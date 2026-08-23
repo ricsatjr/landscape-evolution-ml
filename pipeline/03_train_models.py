@@ -73,6 +73,7 @@ def evaluate_final_models(
     output_dir: str,
     git_hash: str,
     label_tag: str,
+    random_state: int = 42,
     figure_width_cm: float = 14.0,
 ) -> dict:
     """Train final models and produce predicted-vs-true figures.
@@ -118,6 +119,7 @@ def evaluate_final_models(
         results[reg_name]['final_model'] = train_final_model(
             reg_name, results[reg_name],
             X_train, y_train, X_test, y_test,
+            random_state=random_state,
         )
         fm     = results[reg_name]['final_model']
         y_pred = fm['regressor'].predict(X_test)
@@ -412,6 +414,7 @@ def main():
     results = evaluate_final_models(
         X_train, y_train, X_test, y_test,
         results, args.output_dir, git_hash, label_tag,
+        random_state=args.random_state,
     )
     with open(pkl_path, 'wb') as fh:
         pickle.dump(results, fh, protocol=pickle.HIGHEST_PROTOCOL)

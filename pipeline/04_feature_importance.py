@@ -1138,6 +1138,7 @@ def main():
                 red_results[reg_name]['final_model'] = train_final_model(
                     reg_name, red_results[reg_name],
                     X_train_red, y_train, X_test_red, y_test,
+                    random_state=random_state_meta,
                 )
         else:
             print("\nFinal reduced-feature models already present — skipping retraining.")
