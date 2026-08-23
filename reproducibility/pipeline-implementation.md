@@ -34,4 +34,26 @@ A single execution of the above command generates a dataframe of features and la
 
 Dataframe is saved and exported as pickle files. 
 
+# ML model training
+
+`python pipeline/03_train_models.py --data-dir data/features/ --output-dir data/models --labels u_ks kh_ks`
+`
+The above command trains the machine learning models using the features pickle file in data/features using u/ks and kh/ks as target labels
+
+`python pipeline/03_train_models.py --data-dir data/features/ --output-dir data/models --labels u ks kh`
+
+The command trains the machine learning models using u, ks, and kh as target labels
+
+Both commands produce a dictionary of model outputs, saved and exported as a pickle file. 
+
+# Journal figures
+
+
+## ML model performance
+```
+python pipeline/plot_ml_model_performance.py   --pkl <path-to-nested-cv-results-for-ratio-labels>   --pkl <path-to-nested-cv-results-for-individual-labels>  --pred-model mlp --data-dir data/features --row-xlim 0.90 1.00 --row-xlim -0.10 0.20   --row-max-xticks 3 --row-max-xticks 3   --axis-labels --row-height-ratios 1.35 1.35 1.75 1.75   --row-gap 0.40 --top 0.955 --bottom 0.055   --width-cm 19 --height-cm 22.5   --out figures/model_performance.jpg
+```
+The above commands generates a plot showing the performance of trained machine learning models. It requires the paths to the pickle files containing the results of model training, as well as the folder containing the features pickle file. 
+
+This 
 
