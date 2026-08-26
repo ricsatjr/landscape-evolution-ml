@@ -63,7 +63,14 @@ Here, we used the following rasnet files: rasnet-n10-122023-5-99.pkl,rasnet-n10-
 ```
 python pipeline/plot_ml_model_performance.py   --pkl <path-to-nested-cv-results-for-ratio-labels>   --pkl <path-to-nested-cv-results-for-individual-labels>  --pred-model mlp --data-dir data/features --row-xlim 0.90 1.00 --row-xlim -0.10 0.20   --row-max-xticks 3 --row-max-xticks 3   --axis-labels --row-height-ratios 1.35 1.35 1.75 1.75   --row-gap 0.40 --top 0.955 --bottom 0.055   --width-cm 19 --height-cm 22.5   --out figures/model_performance.jpg
 ```
-The above commands generates a plot showing the performance of trained machine learning models. It requires the paths to the pickle files containing the results of model training, as well as the folder containing the features pickle file. 
+The above command generates a plot showing the performance of trained machine learning models. It requires the paths to the pickle files containing the results of model training, as well as the folder containing the features pickle file. 
+
+## Network generation
+
+`python pipeline/plot_network_extraction.py  --rasnet <path-to-rasnet-file> --target-order 5 --order-lw-step 0.35     --legend-loc under-b --legend-shrink 0.75     --output-dir figures  --basemap logA --basemap-alpha 0.5 --basemap-cbar-shrink 0.6`
+
+
+The above command generates a plot with subplos showing a simple cell-to-cell flowpath network, and its correspondng reach-based network after removal of through-nodes. The bottom subplots show an area of one of the synthetic landscapes (rasnet-n10-122023-5-99.pkl) overlain with the extracted networks similar to subplots A and B. 
 
  
 
