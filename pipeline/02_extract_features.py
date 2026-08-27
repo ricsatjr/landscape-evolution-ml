@@ -931,7 +931,7 @@ def run_stage1_rasnet(data_dir, output_dir, job_id,
 # =============================================================================
 
 def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest',
-                        transient_map=None, ts_index=TS_INDEX):
+                        transient_map=None, ts_index=TS_INDEX,elev_err=ELEV_ERR):
     """
     Stage 2: Load rasnet files and compute the full 39-feature vector for
     each landscape. Save label-feature DataFrames as .pkl files.
@@ -993,10 +993,10 @@ def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest',
             # data_dir (rasnet dir), so filename parsing is the only reliable
             # approach here.
             # Filename convention: rasnet-n{elev_err}-{job_id}-{landscape_idx}-{ts_index}.pkl
-            rasnet_files = sorted(data_dir.glob('rasnet-*.pkl'))
+            rasnet_files = sorted(data_dir.glob(f'rasnet-n{int(elev_err)}-*.pkl'))
             if not rasnet_files:
                 raise FileNotFoundError(
-                    f"No rasnet files found in {data_dir}"
+                    f"No rasnet-n{int(elev_err)}-*.pkl files found in {data_dir}"
                 )
             triplets = []
             for rf in rasnet_files:
@@ -1022,13 +1022,13 @@ def run_stage2_features(data_dir, output_dir, job_id, git_hash='latest',
     if not triplets:
         raise ValueError(f"No landscapes found for job_id={job_id}")
 
-    print(f"Stage 2 | {len(triplets)} landscapes | output: {out_file.name}")
+    print(f"Stage 2 | {len(triplets)} landscapes | elev_err={elev_err}m | output: {out_file.name}")						
 
     all_rows = []
     t_start  = time.time()
 
     for i, (jid, landscape_idx, lts_index) in enumerate(triplets):
-        rasnet_file = data_dir / f'rasnet-n{int(ELEV_ERR)}-{jid}-{landscape_idx}-{lts_index}.pkl'
+        rasnet_file = data_dir / f'rasnet-n{int(elev_err)}-{jid}-{landscape_idx}-{lts_index}.pkl'
 
         if not rasnet_file.exists():
             print(f"  [{i+1}/{len(triplets)}] NOT FOUND: {rasnet_file.name}")
@@ -1185,4 +1185,5 @@ if __name__ == "__main__":
             git_hash=git_hash,
             transient_map=transient_map,
             ts_index=args.ts_index,
+            elev_err=args.elev_err,
         )
