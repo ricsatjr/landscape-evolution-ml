@@ -74,9 +74,15 @@ Compare features derived from n10 rasnets with those from n01 rasnets; specifica
 
 # feature importance
 
-`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/train-1200/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --output-dir data/models/n10/train-1200/reduced --cluster-threshold 0.25 --cluster-selection random`
+explore feature clusters for n10:
+`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection random`
 
-`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n10/ --models-pkl data/models/n10/train-1200/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --reduced-models-pkl data/models/n10/train-1200/reduced/nested-cv-results-reduced-u_ks-kh_ks-9b33cab.pkl --output-dir data/models/n10/train-1200/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 Z_cv Z_skew htcrv_min crv_mean Rl Z_mean htcrv_max`
+train n10 models on domain-defined feature cluster representatives:
+`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --reduced-models-pkl data/models/n10/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-9b33cab.pkl --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 Z_cv Z_skew htcrv_min crv_mean Rl Z_mean htcrv_max`
+
+train n01 models on domain-defined feature cluster representatives of the n10 models:
+`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n01/ --models-pkl data/models/n01/ratio/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --reduced-models-pkl data/models/n01/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-9b33cab.pkl --output-dir data/models/n01/ratio/reduced --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 Z_cv Z_skew htcrv_min crv_mean Rl Z_mean htcrv_max --cluster-threshold 0.08`
+- change in threshold is lowered to allow all cluster representatives in the n10 model  
 
           
 
