@@ -322,7 +322,7 @@ def parse_args():
                    help='Git hash suffix of feature pkl files to load '
                         '(e.g. abc1234). Required if multiple hashed versions '
                         'exist in --data-dir.')
-    p.add_argument('--test-fraction', type=float, default=0.2106,  #0.2106 produces 200 samples for test set from 950 total samples 
+    p.add_argument('--test-fraction', type=float, default=0.2,
                    help='Fraction of data held out as the final test set.')
     p.add_argument('--n-outer',      type=int, default=10)
     p.add_argument('--n-inner',      type=int, default=5)
@@ -348,6 +348,8 @@ def main():
     # 1. Load data
     df = load_features(args.data_dir, job_ids=args.job_ids,
                        features_hash=args.features_hash)
+    
+    
     X, y = split_features_labels(df, args.labels)
     print(f"\nFeatures : {X.shape[1]} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
@@ -355,9 +357,15 @@ def main():
     # 2. Train / test split (deterministic tail split)
     n_test  = max(1, int(len(df) * args.test_fraction))
     n_train = len(df) - n_test
+    
+    
     X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
     y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
+    
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
+    
+    
+
 
     # 3. Nested CV
     label_tag = '-'.join(args.labels)
