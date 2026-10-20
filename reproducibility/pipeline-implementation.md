@@ -20,7 +20,7 @@ LE parameters are saved as pickle files; elevation grids are saved as numpy file
 `python pipeline/01_generate_landscapes.py --job-id <job-id> --n-landscapes 10 --output-dir data/landscapes/`
 
 Screen which landscapes are in steady state
-`python pipeline/01c_check_steady_state.py --params-dir data/landscapes --out-dir data/landscapes/steady-state`
+`python pipeline/01c_check_steady_state.py --params-dir data/landscapes --out-dir data/landscapes/steady-state --reference window-mean --fit-window 5`
 
 
 # generating features
@@ -62,7 +62,9 @@ Code trains the machine learning models using the features pickle file in data/f
 A dictionary of model outputs is saved and exported as a pickle file. 
 
 
-`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/ratio --labels u_ks kh_ks --test-fraction 0.2`
+`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/ratio --labels u_ks kh_ks --test-fraction 0.2 --retained-csv data/landscapes/steady-state/steady-state-mean-f5-window-mean-2e0a16b-retained.csv`
+
+`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/indiv --labels u ks kh --test-fraction 0.2 --retained-csv data/landscapes/steady-state/steady-state-mean-f5-window-mean-2e0a16b-retained.csv`
 
 `python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/indiv --labels u_ks kh_ks --test-fraction 0.2`
 

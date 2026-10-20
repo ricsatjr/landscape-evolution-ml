@@ -52,13 +52,16 @@ drifting steadily.
 
 Adoption in normalized time and elevation
 -----------------------------------------
-1.  Scale.  Divide the series by its final value.  Elevation is then a
-    fraction of each landscape's own final mean elevation and the normalized
-    time step dt/T_ss = 1/NUM_TS is identical for every run, so one tolerance
-    means the same thing for every landscape.  This addresses the first
-    limitation.  Note the scaling fixes a unit only: the measure in step 2 is
-    a range, which has no zero point and so does not depend on which value is
-    chosen here.  ``--reference`` selects it for comparison.
+1.  Scale.  Divide the series by a constant drawn from its final window,
+    selected by ``--reference``: the final value, or the mean over the
+    window.  Elevation is then a fraction of a level set by each landscape's
+    own series, and the normalized time step dt/T_ss = 1/NUM_TS is identical
+    for every run, so one tolerance means the same thing for every
+    landscape.  This addresses the first limitation.  The scaling fixes a
+    unit only: the measure in step 2 is a range, hence a difference, so the
+    divisor introduces no zero point on which the verdict could depend.  The
+    two choices differ by less than the variation of the window itself, so
+    they scale every range by the same near-unity factor.
 
 2.  Range over the final window.  The hypothesis verified for each landscape
     is that the final window of its series is at steady state.  A single time
@@ -133,7 +136,7 @@ Usage
     python pipeline/01c_check_steady_state.py --params-dir data/landscapes \
         --series ts_max_elevs --out-dir data/landscapes/steady-state
 
-    python pipeline/01c_check_steady_state.py --params-dir outputs/landscapes \
+    python pipeline/01c_check_steady_state.py --params-dir data/landscapes \
         --fit-window 10 --draw-curves --out-dir data/landscapes/steady-state
 
 Output
@@ -999,9 +1002,9 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument('--params-dir', default='outputs/elevts',
+    p.add_argument('--params-dir', default='data/landscapes',
                    help='Directory containing params-{job_id}.pkl files. '
-                        'Default: outputs/elevts.')
+                        'Default: data/landscapes.')
     p.add_argument('--job-ids', nargs='+', default=None,
                    help='Restrict to these job IDs. Default: all found.')
     p.add_argument('--series', default='ts_mean_elevs',
@@ -1047,8 +1050,9 @@ def main():
                    help='Skip the -retained.csv and -excluded.csv manifests.')
     p.add_argument('--formats', nargs='+', default=['png'],
                    help='Figure formats to write. Default: png.')
-    p.add_argument('--out-dir', default='.',
-                   help='Directory for the derived output filenames.')
+    p.add_argument('--out-dir', default='data/landscapes/steady-state',
+                   help='Directory for the derived output filenames. '
+                        'Default: data/landscapes/steady-state.')
     p.add_argument('--out-stem', default=None,
                    help='Override the derived filename stem.')
     args = p.parse_args()
