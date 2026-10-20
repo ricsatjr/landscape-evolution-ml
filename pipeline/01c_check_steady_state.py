@@ -127,14 +127,14 @@ Adoption in normalized time and elevation
 
 Usage
 -----
-    python 01c_check_steady_state.py --params-dir outputs/elevts \
-        --out-dir outputs/steady-state
+    python pipeline/01c_check_steady_state.py --params-dir data/parameters \
+        --out-dir data/landscapes/steady-state
 
-    python 01c_check_steady_state.py --params-dir outputs/elevts \
-        --series ts_max_elevs --out-dir outputs/steady-state
+    python pipeline/01c_check_steady_state.py --params-dir data/parameters \
+        --series ts_max_elevs --out-dir data/landscapes/steady-state
 
-    python 01c_check_steady_state.py --params-dir outputs/elevts \
-        --fit-window 10 --draw-curves --out-dir outputs/steady-state
+    python pipeline/01c_check_steady_state.py --params-dir outputs/parameters \
+        --fit-window 10 --draw-curves --out-dir data/landscapes/steady-state
 
 Output
 ------
@@ -144,10 +144,18 @@ Output
         or significance flag is written: the method uses differences of the
         recorded series only.
 
+    steady-state-{series}-f{fit}-{reference}-{hash}-retained.csv
+        The landscapes that passed, as (job_id, landscape_idx, ts_index) plus
+        the measured range.  This is the selection list for downstream
+        processing: those three columns are the refactored identifiers used
+        by ``02_extract_features.py`` and present in the features table, so
+        the list joins onto it directly.  Legacy ``tmux-sess``/``df-ind``
+        parameter files are renamed on load, so the manifest is always in the
+        refactored convention regardless of the input.
+
     steady-state-{series}-f{fit}-{reference}-{hash}-excluded.csv
-        The landscapes that failed verification, with the reason, for joining
-        into downstream training by (job_id, landscape_idx).  Written unless
-        ``--no-manifest``.
+        The landscapes that failed verification, with the reason, keyed the
+        same way.  Both manifests are suppressed by ``--no-manifest``.
 
     steady-state-{series}-f{fit}-{reference}-{hash}.png
         Panel a, normalized trajectories; panel b, R(t*).  Both as quantile
@@ -318,6 +326,14 @@ def load_params(params_dir: str, job_ids: list = None) -> pd.DataFrame:
     dfs = [normalize_keys(pd.read_pickle(p), p) for p in paths]
     df = pd.concat(dfs, ignore_index=True)
     print(f"Loaded {len(df):,} landscapes from {len(paths)} file(s).")
+
+    dup = df.duplicated(subset=['job_id', 'landscape_idx'], keep=False)
+    if dup.any():
+        pairs = df.loc[dup, ['job_id', 'landscape_idx']].drop_duplicates()
+        print(f"  WARNING: {int(dup.sum()):,} rows share "
+              f"{len(pairs):,} (job_id, landscape_idx) pairs. The manifests "
+              f"key on that pair, so duplicates would make the retained list "
+              f"ambiguous; check for overlapping parameter directories.")
     return df
 
 
@@ -454,7 +470,7 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
     statistics, so the two describe the same interval.
     """
     out = {
-        'status': 'ok', 'n_ts': 0, 'z_scale': np.nan,
+        'status': 'ok', 'n_ts': 0, 'ts_index': -1, 'z_scale': np.nan,
         'range_rel': np.nan, 't_fit': np.nan,
         'dz_max': np.nan, 'dz_last': np.nan, 'mono': np.nan,
         'end_pos': np.nan, 'overshoot': np.nan, 't_peak': np.nan,
@@ -470,6 +486,9 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
     z = np.asarray(z, dtype=float).ravel()
     n = len(z)
     out['n_ts'] = n
+    # Index of the final snapshot, matching the elevts-/rasnet- filename
+    # convention and the ts_index column of the features table.
+    out['ts_index'] = n - 1
 
     if n < max(fit_window, norm_window, 3) or not np.isfinite(z).all():
         out['status'] = 'invalid'
@@ -1025,7 +1044,7 @@ def main():
     p.add_argument('--point-size', type=float, default=11.0,
                    help='Marker area in the coverage figure. Default: 11.')
     p.add_argument('--no-manifest', dest='manifest', action='store_false',
-                   help='Skip the -excluded.csv manifest of failed landscapes.')
+                   help='Skip the -retained.csv and -excluded.csv manifests.')
     p.add_argument('--formats', nargs='+', default=['png'],
                    help='Figure formats to write. Default: png.')
     p.add_argument('--out-dir', default='.',
@@ -1058,13 +1077,18 @@ def main():
     print(f"\nWrote {csv_path}")
 
     if args.manifest:
+        keep = res.loc[res['verified'],
+                       ['job_id', 'landscape_idx', 'ts_index', 'range_rel']]
+        keep_path = csv_path.with_name(csv_path.stem + '-retained.csv')
+        keep.to_csv(keep_path, index=False)
+        print(f"Wrote {keep_path}  ({len(keep):,} retained)")
+
         man = res.loc[~res['verified'],
                       ['job_id', 'landscape_idx', 'exclusion_reason',
                        'range_rel', 'dz_max', 'mono']]
         man_path = csv_path.with_name(csv_path.stem + '-excluded.csv')
         man.to_csv(man_path, index=False)
-        print(f"Wrote {man_path}  ({len(man):,} excluded, "
-              f"{int(res['verified'].sum()):,} retained)")
+        print(f"Wrote {man_path}  ({len(man):,} excluded)")
 
     if args.plot and curves is not None:
         fig = make_figure(res, curves, args)
