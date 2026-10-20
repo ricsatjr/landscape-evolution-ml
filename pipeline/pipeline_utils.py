@@ -135,7 +135,6 @@ def read_retained_ids(path: str) -> pd.DataFrame:
     return man
 
 
-
 def identity_keys(df: pd.DataFrame) -> list:
     """Return the identifier columns of ``df``, in canonical order.
 
@@ -198,10 +197,10 @@ def select_by_ids(df: pd.DataFrame, ids: list, keys: list = None
                   ) -> pd.DataFrame:
     """Select the rows of ``df`` named by ``ids``, in the order given.
 
-    The identity-based counterpart of ``df.loc[idx]``.  Unlike index labels,
-    an identity denotes the same landscape whatever else was loaded alongside
-    it, so a split recorded this way survives a changed job selection, glob
-    order or steady-state filter.
+    The identity-based counterpart of label selection.  An identity denotes
+    the same landscape whatever else was loaded alongside it, so a split
+    recorded this way survives a changed job selection, glob order or
+    steady-state filter.
 
     Parameters
     ----------
@@ -257,6 +256,7 @@ def select_by_ids(df: pd.DataFrame, ids: list, keys: list = None
             f"--features-dir, --job-ids and the steady-state filter."
         )
     return df.iloc[pos]
+
 
 def load_features(data_dir: str, job_ids: list = None,
                   features_hash: str = None,
@@ -383,6 +383,7 @@ def load_features(data_dir: str, job_ids: list = None,
         # than by index label (see the module Notes), so this is provenance
         # only and nothing downstream depends on it.
         n_before = len(df)
+        df_all = df
         df = df[have.isin(want)]
 
         unmatched = len(want.difference(have))
@@ -394,11 +395,31 @@ def load_features(data_dir: str, job_ids: list = None,
             print(f"    NOTE: {unmatched:,} of {len(want):,} manifest entries "
                   f"are absent from the loaded features; check that the "
                   f"manifest and the feature files cover the same jobs.")
+        # A match on ts_index fails wholesale if the manifest and the feature
+        # table refer to different time steps -- for instance when features
+        # were extracted at a per-landscape selected_ts_index while the
+        # manifest records the final step of every series. Report what a
+        # match on job_id and landscape_idx alone would have found, rather
+        # than leaving an empty result unexplained. The keys are not reduced
+        # automatically: which time step a feature row describes is a
+        # question for the caller, not an inference to make here.
+        if 'ts_index' in keys:
+            n_pair = int(pd.MultiIndex.from_frame(df_all[_RETAINED_KEYS]).isin(
+                pd.MultiIndex.from_frame(man[_RETAINED_KEYS])).sum())
+            if n_pair > len(df):
+                print(f"    NOTE: a match on job_id+landscape_idx alone "
+                      f"would retain {n_pair:,}. The two sides disagree on "
+                      f"ts_index: manifest "
+                      f"{sorted(man['ts_index'].unique().tolist())[:5]} vs "
+                      f"features "
+                      f"{sorted(df_all['ts_index'].unique().tolist())[:5]}.")
+
         if len(df) == 0:
             raise ValueError(
                 "The retained-landscape filter left no rows. The manifest "
                 "and the feature files appear to describe different "
-                "ensembles."
+                "ensembles, or different time steps of the same one -- see "
+                "the note above."
             )
 
     return df
@@ -408,13 +429,11 @@ def load_features(data_dir: str, job_ids: list = None,
 # Feature / label splitting
 # =============================================================================
 
-# All columns in features-*.pkl that are LE parameters or derived quantities
-# rather than topographic features.  These are excluded from X.
-# Columns of a feature table that are not predictors: the LE parameters and
+# Columns of features-*.pkl that are not predictors: the LE parameters and
 # their ratios (candidate labels), the imposed elevation error, and the
-# identifier columns. The identifiers are excluded from X but remain on the
-# loaded frame, which is what makes identity-based selection possible — see
-# select_by_ids.
+# identifier columns.  All are excluded from X.  The identifiers remain on
+# the loaded frame, which is what makes identity-based selection possible —
+# see select_by_ids.
 _NON_FEATURE_COLS = {'u', 'kh', 'ks', 'u_ks', 'kh_ks', 'u_kh',
                      'elev_err', 'job_id', 'landscape_idx', 'ts_index'}
 
