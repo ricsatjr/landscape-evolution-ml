@@ -8,30 +8,56 @@ and writes a results pickle that is later consumed by
 
 Workflow
 --------
-1. Load and concatenate ``features-{job_id}.pkl`` files from ``--data-dir``.
+1. Load and concatenate ``features-{job_id}.pkl`` files from ``--data-dir``,
+   optionally restricted to the landscapes verified as being at steady state
+   (``--retained-csv``).
 2. Split into features (X) and log₁₀-transformed labels (y).
-3. Hold out a final test set (``--test-fraction``).
+3. Hold out a final test set (``--test-fraction``), recording its membership
+   by landscape identity in ``_meta['train_ids']`` / ``_meta['test_ids']``.
 4. Run nested cross-validation on the full feature set:
    - Outer loop: ShuffleSplit with ``--n-outer`` folds evaluates
      generalisation performance.
    - Inner loop: ShuffleSplit with ``--n-inner`` folds tunes hyperparameters
      via ``RandomizedSearchCV`` (``--n-iter`` candidates per fold).
 5. Select final hyperparameters per algorithm; train on full training set.
-6. Evaluate final models on held-out test set; save figures and pickle.
+6. Evaluate final models on held-out test set; save figures and pickle,
+   under an ``-ss`` filename tag when the run was filtered.
 
 Usage
 -----
-    python 03_train_models.py \\
+    python pipeline/03_train_models.py \\
         --data-dir data/features \\
         --output-dir outputs \\
         --labels u_ks kh_ks \\
         --n-outer 10 --n-inner 5 --n-iter 20
 
     # Train on individual parameters
-    python 03_train_models.py --labels u kh ks
+    python pipeline/03_train_models.py --labels u kh ks
 
     # Skip nested CV; re-run final-model and plots from an existing pickle
-    python 03_train_models.py --skip-cv --results-pkl outputs/nested-cv-results-full-u_ks-kh_ks-abc1234.pkl --labels u_ks kh_ks
+    python pipeline/03_train_models.py --skip-cv --results-pkl outputs/nested-cv-results-full-u_ks-kh_ks-abc1234.pkl --labels u_ks kh_ks
+
+    # Train on the steady-state subset only
+    python pipeline/03_train_models.py \\
+        --retained-csv data/landscapes/steady-state/steady-state-ts_mean_elevs-f5-final-abc1234-retained.csv
+
+Notes
+-----
+The train / test split is positional (``X.iloc[:n_train]``), so restricting
+the ensemble with ``--retained-csv`` changes which landscapes fall in the test
+set.  Results obtained with and without the filter are therefore not directly
+comparable: the two differ in the train / test split and in every CV fold,
+since ``ShuffleSplit`` permutes a different number of rows.  A filtered run
+therefore writes its pickle and figures under an ``-ss`` filename tag, and
+records the manifest it was trained under in ``_meta['retained_csv']``.
+
+``04_feature_importance.py`` and ``03b_compare_features.py`` reload the
+features and reapply the split from ``_meta['train_ids']`` /
+``_meta['test_ids']``, which name landscapes by their ``job_id``,
+``landscape_idx`` and ``ts_index`` and are therefore unaffected by the job
+selection or glob order of that reload.  A results pickle written before
+these keys existed cannot be analysed by the current ``04``; retrain to
+produce one.
 """
 
 import argparse
@@ -48,7 +74,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from display_labels import TARGET_DISPLAY as _TARGET_DISPLAY
 from ml_core import nested_cv, train_final_model
-from pipeline_utils import _git_hash, load_features, split_features_labels
+from pipeline_utils import (_git_hash, identity_keys, landscape_ids,
+                            load_features, split_features_labels)
 
 
 # =============================================================================
@@ -88,6 +115,10 @@ def evaluate_final_models(
     results : dict   — output of ``nested_cv()``; mutated in-place
     output_dir : str
     git_hash : str
+    label_tag : str  — filename tag: the hyphen-joined target columns, with
+        ``-ss`` appended when the run was restricted to steady-state
+        landscapes, so that filtered and unfiltered figures of the same git
+        hash do not collide
     figure_width_cm : float
 
     Returns
@@ -216,6 +247,7 @@ def plot_nested_cv_results(
     y : pd.DataFrame — training targets (column names used for annotations)
     output_dir : str
     git_hash : str
+    label_tag : str  — filename tag; see ``evaluate_final_models``
     figure_width_cm : float
     box : bool — True → box plots, False → scatter + mean marker
     """
@@ -322,6 +354,14 @@ def parse_args():
                    help='Git hash suffix of feature pkl files to load '
                         '(e.g. abc1234). Required if multiple hashed versions '
                         'exist in --data-dir.')
+    p.add_argument('--retained-csv', default=None,
+                   help='Path to a *-retained.csv manifest from '
+                        '01c_check_steady_state.py. Restricts training to '
+                        'the landscapes verified as being at steady state. '
+                        'Changes test-set membership, since the split is '
+                        'positional. Output filenames gain an -ss tag so '
+                        'that filtered and unfiltered runs of the same git '
+                        'hash do not overwrite one another.')
     p.add_argument('--test-fraction', type=float, default=0.2,
                    help='Fraction of data held out as the final test set.')
     p.add_argument('--n-outer',      type=int, default=10)
@@ -347,28 +387,54 @@ def main():
 
     # 1. Load data
     df = load_features(args.data_dir, job_ids=args.job_ids,
-                       features_hash=args.features_hash)
-    
-    
+                       features_hash=args.features_hash,
+                       retained_csv=args.retained_csv)
+
     X, y = split_features_labels(df, args.labels)
     print(f"\nFeatures : {X.shape[1]} columns, {X.shape[0]:,} samples")
     print(f"Targets  : {list(y.columns)}")
 
     # 2. Train / test split (deterministic tail split)
+    #
+    # The split is positional and relies on the concatenated frame carrying no
+    # ordering with respect to the LE parameters or the labels: under that
+    # assumption the final rows are an exchangeable sample and no seeding is
+    # required. The assumption also makes --retained-csv benign: the filter
+    # is a lookup on the manifest, but which landscapes the manifest omits is
+    # determined by their own steady-state outcome and hence by their
+    # parameters, so under the same assumption exclusion is independent of
+    # row position. It then thins the train and test blocks in the same
+    # proportion, leaving the cut at nearly the same place in the unfiltered
+    # ordering. Both properties fail if the frame is ever sorted by a
+    # parameter, or if feature files are added such that their glob order
+    # groups landscapes systematically.
     n_test  = max(1, int(len(df) * args.test_fraction))
     n_train = len(df) - n_test
-    
-    
+
     X_train, X_test = X.iloc[:n_train], X.iloc[n_train:]
     y_train, y_test = y.iloc[:n_train], y.iloc[n_train:]
-    
+
+    # Record the split by landscape identity. This is the contract that
+    # 04_feature_importance.py and 03b_compare_features.py reapply, via
+    # pipeline_utils.select_by_ids: an identity denotes the same landscape
+    # whatever else was loaded alongside it, so the split survives a changed
+    # job selection, glob order or steady-state filter.
+    id_keys  = identity_keys(df)
+    train_ids = landscape_ids(df.iloc[:n_train], id_keys)
+    test_ids  = landscape_ids(df.iloc[n_train:], id_keys)
+
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
-    
-    
 
 
     # 3. Nested CV
     label_tag = '-'.join(args.labels)
+    # label_tag appears only in output filenames. Mark a steady-state-filtered
+    # run so that it cannot overwrite the unfiltered results and figures of
+    # the same git hash: the two differ in every stored quantity, since the
+    # train / test split and every CV fold are drawn from a different number
+    # of rows.
+    if args.retained_csv:
+        label_tag += '-ss'
     pkl_path  = args.results_pkl or os.path.join(
         args.output_dir, f'nested-cv-results-full-{label_tag}-{git_hash}.pkl'
     )
@@ -386,6 +452,30 @@ def main():
                 f"  CLI  : {args.labels}\n"
                 f"  Check that --results-pkl corresponds to the intended labels."
             )
+        # ... and on the same training set. The plots below pair the stored
+        # results with y_train as loaded now, so the two must describe the
+        # same landscapes. Comparing the recorded identities tests that
+        # directly, and so also catches a changed --retained-csv, a changed
+        # --job-ids and feature files added since training.
+        pkl_ids = results.get('_meta', {}).get('train_ids')
+        if pkl_ids is None:
+            raise ValueError(
+                f"--results-pkl has no train_ids in _meta: {pkl_path}\n"
+                f"  It predates identity-based split records and cannot be "
+                f"paired with a freshly loaded frame. Re-run without "
+                f"--skip-cv to retrain."
+            )
+        if [tuple(i) for i in pkl_ids] != train_ids:
+            raise ValueError(
+                f"Training-set mismatch between --results-pkl and the "
+                f"features loaded now.\n"
+                f"  pkl  : {len(pkl_ids):,} landscapes "
+                f"(retained_csv={results['_meta'].get('retained_csv')})\n"
+                f"  now  : {len(train_ids):,} landscapes "
+                f"(retained_csv={args.retained_csv})\n"
+                f"  Check --retained-csv, --job-ids, --features-hash and "
+                f"whether feature files have been added to --data-dir."
+            )
     else:
         results = nested_cv(
             X_train, y_train,
@@ -398,9 +488,11 @@ def main():
             'feature_names':  list(X_train.columns),
             'label_names':    list(y_train.columns),
             'job_ids':        sorted(df['job_id'].unique().tolist()),
+            'retained_csv':   args.retained_csv,
             'test_fraction':  args.test_fraction,
-            'train_idx':      list(X_train.index),
-            'test_idx':       list(X_test.index),
+            'id_keys':        id_keys,
+            'train_ids':      train_ids,
+            'test_ids':       test_ids,
             'n_outer_splits': args.n_outer,
             'n_inner_splits': args.n_inner,
             'n_iter':         args.n_iter,
