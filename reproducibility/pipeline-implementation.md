@@ -19,6 +19,10 @@ LE parameters are saved as pickle files; elevation grids are saved as numpy file
 
 `python pipeline/01_generate_landscapes.py --job-id <job-id> --n-landscapes 10 --output-dir data/landscapes/`
 
+Screen which landscapes are in steady state
+`python pipeline/01c_check_steady_state.py --params-dir data/landscapes --out-dir data/landscapes/steady-state`
+
+
 # generating features
 
 ## stage 1

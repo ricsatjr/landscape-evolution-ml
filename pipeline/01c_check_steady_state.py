@@ -127,13 +127,13 @@ Adoption in normalized time and elevation
 
 Usage
 -----
-    python pipeline/01c_check_steady_state.py --params-dir data/parameters \
+    python pipeline/01c_check_steady_state.py --params-dir data/landscapes \
         --out-dir data/landscapes/steady-state
 
-    python pipeline/01c_check_steady_state.py --params-dir data/parameters \
+    python pipeline/01c_check_steady_state.py --params-dir data/landscapes \
         --series ts_max_elevs --out-dir data/landscapes/steady-state
 
-    python pipeline/01c_check_steady_state.py --params-dir outputs/parameters \
+    python pipeline/01c_check_steady_state.py --params-dir outputs/landscapes \
         --fit-window 10 --draw-curves --out-dir data/landscapes/steady-state
 
 Output
