@@ -62,20 +62,23 @@ Code trains the machine learning models using the features pickle file in data/f
 A dictionary of model outputs is saved and exported as a pickle file. 
 
 
-`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/ratio --labels u_ks kh_ks --test-fraction 0.2 --retained-csv data/landscapes/steady-state/steady-state-mean-f5-window-mean-2e0a16b-retained.csv`
+`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/ratio --labels u_ks kh_ks --test-fraction 0.2 --retained-csv data/landscapes/steady-state/<name of file containing retained labels>`
 
-`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/indiv --labels u ks kh --test-fraction 0.2 --retained-csv data/landscapes/steady-state/steady-state-mean-f5-window-mean-2e0a16b-retained.csv`
-
-`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/indiv --labels u_ks kh_ks --test-fraction 0.2`
+`python pipeline/03_train_models.py --data-dir data/features/n10 --output-dir data/models/n10/indiv --labels u ks kh --test-fraction 0.2 --retained-csv data/landscapes/steady-state/<name of file containing retained labels>`
 
 
-`python pipeline/03_train_models.py --data-dir data/features/n01 --output-dir data/models/n01/ratio --labels u_ks kh_ks --test-fraction 0.2`
-`
+`python pipeline/03_train_models.py --data-dir data/features/n01 --output-dir data/models/n01/ratio --labels u_ks kh_ks --test-fraction 0.2 --retained-csv data/landscapes/steady-state/<name of file containing retained labels>`
+
+`python pipeline/03_train_models.py --data-dir data/features/n01 --output-dir data/models/n01/indiv --labels u ks kh --test-fraction 0.2 --retained-csv data/landscapes/steady-state/<name of file containing retained labels>`
+
+
+
 # Feature comparison
 
 Compare features derived from n10 rasnets with those from n01 rasnets; specifically how the distribution of each feature in n01 varies in relation to the distribution of the corresponding feature in n10.  
 
-`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --out data/features/paired-feature-comp.csv --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-9b33cab.pkl --subset train --plot data/features/paired-feature-comp.jpg`
+`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --out data/features/paired-feature-comparison.csv`
+
 
 
 # feature importance
