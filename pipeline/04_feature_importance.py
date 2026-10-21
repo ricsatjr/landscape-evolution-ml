@@ -5,9 +5,6 @@ Feature importance analysis for the landscape-evolution ML framework.
 Identifies which topographic features are most informative for estimating
 dimensionless landscape evolution parameter ratios (U/Ks, Kh/Ks).
 
-This script is the computational counterpart to the feature importance
-sections of the associated JGR:ES article (Figs. 10-12).
-
 Modes (--mode)
 --------------
 explore
@@ -51,8 +48,11 @@ naming the offending features so the user can resolve the conflict.
 
 Output filename conventions
 ---------------------------
-All output files include a ``{label_tag}`` (hyphen-joined target column names)
-and ``{git_hash}`` suffix for provenance tracking.
+All output files include a ``{label_tag}`` and a ``{git_hash}`` suffix for
+provenance tracking.  ``{label_tag}`` is the hyphen-joined target column
+names, with ``-ss`` appended when the models were trained on the
+steady-state subset, matching the tag ``03_train_models.py`` applies, so
+that filtered and unfiltered outputs of the same git hash do not collide.
 
 Permutation importance outputs carry an additional target suffix:
     feature-importance-{target_col}-{label_tag}-{hash}   <- per-target
@@ -110,7 +110,8 @@ from sklearn.metrics import r2_score
 
 from display_labels import FEATURE_DISPLAY, TARGET_DISPLAY
 from ml_core import nested_cv, train_final_model
-from pipeline_utils import _git_hash, load_features, split_features_labels
+from pipeline_utils import (_git_hash, load_features, select_by_ids,
+                            split_features_labels)
 
 
 # =============================================================================
@@ -824,10 +825,12 @@ def parse_args():
         help=(
             'Path to an existing results pkl file.  Required for all modes.\n'
             'In explore mode: provides the authoritative feature_names list '
-            'and train_idx for clustering on the training subset.\n'
+            'and the training-set identities for clustering on the '
+            'training subset.\n'
             'In reduced mode: must point to the FULL-feature results pkl '
-            'produced by 03_train_models.py.  Train/test split indices, label '
-            'names, and random state are inherited from its _meta.\n'
+            'produced by 03_train_models.py.  The train/test split, label '
+            'names, random state and steady-state filter are inherited from '
+            'its _meta.\n'
             'In importance mode: must point to the REDUCED-feature results pkl '
             'produced by a previous reduced run of this script.'
         ),
@@ -989,9 +992,10 @@ def main():
 
     # ── Load models pkl (all modes) ───────────────────────────────────────────
     # --models-pkl is required for all modes.  In explore mode it provides the
-    # authoritative feature_names list and train_idx for clustering on the
-    # training subset; in reduced mode it provides the full-feature results;
-    # in importance mode it provides the reduced-feature results.
+    # authoritative feature_names list and the training-set identities for
+    # clustering on the training subset; in reduced mode it provides the
+    # full-feature results; in importance mode it provides the
+    # reduced-feature results.
     print(f"\nLoading models pkl: {args.models_pkl}")
     with open(args.models_pkl, 'rb') as fh:
         results = pickle.load(fh)
@@ -1002,21 +1006,40 @@ def main():
             f"Models pkl _meta has no feature_names: {args.models_pkl}\n"
             f"Cannot determine feature set."
         )
-    if not (meta.get('train_idx') and meta.get('test_idx')):
+    if not (meta.get('train_ids') and meta.get('test_ids')):
         raise ValueError(
-            f"Models pkl _meta is missing train_idx or test_idx: {args.models_pkl}\n"
-            f"Cannot reconstruct train/test split."
+            f"Models pkl _meta is missing train_ids or test_ids: "
+            f"{args.models_pkl}\n"
+            f"Cannot reconstruct train/test split. The split is reapplied "
+            f"by landscape identity; retrain with the current "
+            f"03_train_models.py to produce a pkl that records it."
         )
 
     # ── Load features ──────────────────────────────────────────────────────────
+    # features_hash is inherited from the pkl because it is needed to find
+    # the files. No steady-state manifest is read: the split identities below
+    # already name none but the landscapes the models were trained on, so
+    # applying one would change nothing while making this run depend on that
+    # path still resolving. The manifest recorded in _meta is carried through
+    # as provenance and used for the output filename tag.
     df = load_features(
         args.features_dir,
         job_ids=args.job_ids,
         features_hash=meta.get('features_hash', args.features_hash),
     )
 
-    train_idx = meta['train_idx']
-    test_idx  = meta['test_idx']
+    # The split is reapplied by landscape identity rather than by index
+    # label, so it is unaffected by the job selection or glob order of this
+    # reload, and a landscape that is absent raises rather than resolving to
+    # a different row.
+    id_keys   = meta.get('id_keys')
+    train_ids = meta['train_ids']
+    test_ids  = meta['test_ids']
+
+    # Mark every output derived from a steady-state-filtered pkl, as
+    # 03_train_models.py does for its own, so that filtered and unfiltered
+    # outputs of the same git hash cannot overwrite one another.
+    ss_tag = '-ss' if meta.get('retained_csv') else ''
 
     # ── EXPLORE mode ───────────────────────────────────────────────────────────
     if args.mode == 'explore':
@@ -1024,7 +1047,7 @@ def main():
         # Use feature_names from _meta and restrict to the training subset to
         # match the clustering behaviour of reduced mode exactly.
         feature_names = meta['feature_names']
-        X_train = df[feature_names].loc[train_idx]
+        X_train = select_by_ids(df, train_ids, id_keys)[feature_names]
         print(f"Features : {X_train.shape[1]} columns, "
               f"{X_train.shape[0]:,} training samples")
         get_feature_clusters(
@@ -1032,7 +1055,7 @@ def main():
             dist_thresh=args.cluster_threshold,
             output_dir=args.output_dir,
             git_hash=git_hash,
-            label_tag='explore',
+            label_tag='explore' + ss_tag,
             cluster_selection=args.cluster_selection,
             domain_features=args.domain_features,
             random_state=args.random_state,
@@ -1050,18 +1073,24 @@ def main():
     print(f"  label_names  : {label_names}")
     print(f"  git_hash     : {meta.get('git_hash')}")
     print(f"  random_state : {meta.get('random_state')}")
-    print(f"  train/test   : {len(train_idx)} / {len(test_idx)}")
+    print(f"  train/test   : {len(train_ids)} / {len(test_ids)}")
 
-    label_tag         = '-'.join(label_names)
+    label_tag         = '-'.join(label_names) + ss_tag
     random_state_meta = meta.get('random_state', args.random_state)
 
-    X, y = split_features_labels(df, label_names)
-    all_features = list(X.columns)
-    print(f"\nFeatures : {len(all_features)} columns, {X.shape[0]:,} samples")
-    print(f"Targets  : {list(y.columns)}")
+    # X carries no identifier columns, so the identities are applied to the
+    # loaded frame and the result split afterwards, not the other way round.
+    X_train, y_train = split_features_labels(
+        select_by_ids(df, train_ids, id_keys), label_names)
+    X_test,  y_test  = split_features_labels(
+        select_by_ids(df, test_ids,  id_keys), label_names)
 
-    X_train, X_test = X.loc[train_idx], X.loc[test_idx]
-    y_train, y_test = y.loc[train_idx], y.loc[test_idx]
+    # The feature list is taken from the training split rather than from the
+    # whole loaded frame, so that nothing here reports a sample count for
+    # landscapes the analysis does not use.
+    all_features = list(X_train.columns)
+    print(f"\nFeatures : {len(all_features)} columns")
+    print(f"Targets  : {list(y_train.columns)}")
     print(f"Train : {len(X_train):,}   Test : {len(X_test):,}")
 
     # ── REDUCED mode ───────────────────────────────────────────────────────────
@@ -1114,8 +1143,10 @@ def main():
             'reduced_feature_names': list(X_train_red.columns), # reduced subset
             'label_names':           list(y_train.columns),
             'job_ids':               sorted(df['job_id'].unique().tolist()),
-            'train_idx':             list(X_train_red.index),
-            'test_idx':              list(X_test_red.index),
+            'retained_csv':          meta.get('retained_csv'),
+            'id_keys':               id_keys,
+            'train_ids':             train_ids,
+            'test_ids':              test_ids,
             'random_state':          random_state_meta,
             'n_outer_splits':        n_outer,
             'n_inner_splits':        n_inner,
