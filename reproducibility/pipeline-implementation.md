@@ -77,7 +77,8 @@ A dictionary of model outputs is saved and exported as a pickle file.
 
 Compare features derived from n10 rasnets with those from n01 rasnets; specifically how the distribution of each feature in n01 varies in relation to the distribution of the corresponding feature in n10.  
 
-`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --out data/features/paired-feature-comparison.csv`
+`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --out data/features/compare-paired-features.csv --plot-combined data/features/compare-paired-features.png`
+
 
 
 
