@@ -35,6 +35,17 @@ importance
     individual target and then for all targets combined (mean R2); the
     combined run is omitted when only one target is present.
 
+grouped
+    As ``importance``, but the features named in ``--feature-groups`` are
+    permuted jointly rather than one at a time.  A joint permutation applies
+    the same row ordering to every column in the group, so the correlation
+    structure within the group is preserved while its relationship to the
+    targets is destroyed.  This measures the information carried by the group
+    as a whole, which a single-column permutation cannot do when two columns
+    are collinear and can substitute for one another.  Features not named in
+    any group are permuted singly, so the resulting table is directly
+    comparable to that of ``importance`` mode.
+
 Feature clustering
 ------------------
 Clustering is always performed on the training subset only to avoid data
@@ -45,6 +56,13 @@ features must be supplied via ``--domain-features``.  The list is validated
 against the clustering result at the given ``--cluster-threshold``: if any
 two features in the list belong to the same cluster, an error is raised
 naming the offending features so the user can resolve the conflict.
+
+``--allow-cluster-collisions`` downgrades that error to a printed warning and
+uses the supplied list unchanged.  This is required when a feature set fixed
+on one dataset is carried onto another whose correlation structure differs,
+where a collision is a result to be recorded rather than a configuration
+error.  The check for features absent from the loaded feature set is
+unaffected and always raises.
 
 Output filename conventions
 ---------------------------
@@ -57,6 +75,11 @@ that filtered and unfiltered outputs of the same git hash do not collide.
 Permutation importance outputs carry an additional target suffix:
     feature-importance-{target_col}-{label_tag}-{hash}   <- per-target
     feature-importance-all-{label_tag}-{hash}             <- combined
+
+Outputs of ``grouped`` mode carry a ``-grouped`` infix before the target
+suffix, so that they cannot overwrite the single-column results of an
+``importance`` run of the same git hash:
+    feature-importance-grouped-{target_col}-{label_tag}-{hash}
 
 Usage
 -----
@@ -86,6 +109,14 @@ Usage
         --features-dir data/features \\
         --models-pkl outputs/models/nested-cv-results-reduced-abc1234.pkl \\
         --output-dir outputs/importance
+
+    # Joint permutation of a collinear pair, all other features permuted singly
+    python 04_feature_importance.py \\
+        --mode grouped \\
+        --features-dir data/features \\
+        --models-pkl outputs/models/nested-cv-results-reduced-abc1234.pkl \\
+        --output-dir outputs/grouped \\
+        --feature-groups Rl0+Rb0
 """
 
 import argparse
@@ -191,6 +222,91 @@ def _make_single_target_scorer(target_idx: int):
     return _score
 
 
+def _mean_target_scorer(estimator, X, y) -> float:
+    """Return mean R2 across all targets for a fitted multi-output model.
+
+    Equivalent to the ``'r2'`` string scorer that
+    ``sklearn.inspection.permutation_importance`` resolves internally
+    (``multioutput='uniform_average'``), exposed as a callable so that the
+    grouped-permutation path can score with the same rule without going
+    through scikit-learn's scorer lookup.
+
+    Parameters
+    ----------
+    estimator : fitted Pipeline
+        A fitted scikit-learn Pipeline (StandardScaler + regressor).
+    X : pd.DataFrame
+        Feature matrix to score on.
+    y : pd.DataFrame
+        log10-transformed targets, all columns.
+
+    Returns
+    -------
+    float
+        Mean R2 across target columns.
+    """
+    return r2_score(y, estimator.predict(X))
+
+
+def _plot_importance_scores(ax, importances: np.ndarray, labels: list,
+                            box: bool = False):
+    """Plot per-repeat importance scores on one axes, sorted by mean.
+
+    Shared by the single-column and grouped permutation paths so that both
+    produce identically styled panels.
+
+    Parameters
+    ----------
+    ax : matplotlib Axes
+        Axes object to plot into.
+    importances : np.ndarray of shape (n_rows, n_repeats)
+        Importance score per row per permutation repeat.
+    labels : list of str
+        Row labels, ordered to match the rows of ``importances``.  Feature
+        names in the single-column case, group labels in the grouped case.
+    box : bool
+        If True, plot repeat scores as box plots.  If False (default), plot
+        individual repeat scores as dots with the mean marked by a vertical
+        bar.
+
+    Returns
+    -------
+    ax : matplotlib Axes
+        The axes with importance scores plotted.
+    """
+    sorted_idx = importances.mean(axis=1).argsort()
+
+    ax.axvline(x=0, color='0.5', linestyle='--')
+
+    if box:
+        ax.boxplot(
+            importances[sorted_idx].T,
+            vert=False,
+            boxprops    ={'linewidth': 0.5},
+            whiskerprops={'linewidth': 0.5, 'color': '0.5'},
+            capprops    ={'linewidth': 0.5, 'color': '0.5'},
+            flierprops  ={'marker': 'o', 'mew': 0.5, 'ms': 2, 'color': '0.5'},
+            medianprops ={'color': '0.5'},
+            meanprops   ={'marker': '^', 'mfc': 'k', 'mew': 0, 'mec': 'k',
+                          'alpha': 1, 'ms': 5},
+            showmeans=True,
+        )
+    else:
+        for rank, i in enumerate(sorted_idx):
+            scores  = importances[i]
+            kw      = dict(marker='.', mec='none', mfc='0.5', lw=0, alpha=0.5)
+            label_s = 'score' if rank == 0 else '_'
+            label_m = 'mean'  if rank == 0 else '_'
+            ax.plot(scores, np.full(len(scores), rank), label=label_s, **kw)
+            ax.plot(scores.mean(), rank, marker='|', mec='k', mfc='none',
+                    lw=0, alpha=1, label=label_m)
+
+    ax.set_yticks(np.arange(len(labels)))
+    ax.set_yticklabels([labels[i] for i in sorted_idx], fontsize=7)
+
+    return ax
+
+
 # =============================================================================
 # Feature clustering
 # =============================================================================
@@ -204,6 +320,7 @@ def get_feature_clusters(
     cluster_selection: str = 'domain',
     domain_features: list | None = None,
     random_state: int = 42,
+    enforce_one_per_cluster: bool = True,
 ) -> tuple:
     """Identify multicollinear feature clusters via hierarchical clustering.
 
@@ -246,6 +363,15 @@ def get_feature_clusters(
     random_state : int
         Random seed for ``'random'`` cluster selection.  Has no effect when
         ``cluster_selection='domain'``.
+    enforce_one_per_cluster : bool
+        Controls the response when two or more ``domain_features`` fall in the
+        same cluster at ``dist_thresh``.  True (default) raises ``ValueError``
+        naming the offending features.  False prints the collisions and
+        proceeds with the supplied list unchanged, so that a feature set fixed
+        on one dataset can be carried onto another whose correlation structure
+        differs.  Has no effect when ``cluster_selection='random'``, and does
+        not affect the check for features absent from ``X.columns``, which
+        always raises.
 
     Returns
     -------
@@ -335,10 +461,21 @@ def get_feature_clusters(
                 f"  '{f}' shares a cluster with: {co}"
                 for f, co in violations.items()
             )
-            raise ValueError(
-                f"--domain-features violates the one-per-cluster constraint at "
-                f"--cluster-threshold {dist_thresh}:\n{msg}\n"
-                f"Adjust --domain-features or --cluster-threshold to resolve."
+            if enforce_one_per_cluster:
+                raise ValueError(
+                    f"--domain-features violates the one-per-cluster constraint "
+                    f"at --cluster-threshold {dist_thresh}:\n{msg}\n"
+                    f"Adjust --domain-features or --cluster-threshold to "
+                    f"resolve, or pass --allow-cluster-collisions to proceed "
+                    f"with the supplied list unchanged."
+                )
+            print(
+                f"\nWARNING: --domain-features violates the one-per-cluster "
+                f"constraint at --cluster-threshold {dist_thresh}:\n{msg}\n"
+                f"Proceeding with the supplied list unchanged "
+                f"(--allow-cluster-collisions).  Features sharing a cluster "
+                f"may split importance credit between them, depressing the "
+                f"measured importance of each."
             )
 
         reduced_features = domain_features
@@ -533,37 +670,97 @@ def compute_permutation_importance(
         reg, X, y, n_repeats=n_repeats, random_state=random_state,
         n_jobs=-1, scoring=scoring,
     )
-    sorted_idx = result.importances_mean.argsort()
-
-    ax.axvline(x=0, color='0.5', linestyle='--')
-
-    if box:
-        ax.boxplot(
-            result.importances[sorted_idx].T,
-            vert=False,
-            boxprops    ={'linewidth': 0.5},
-            whiskerprops={'linewidth': 0.5, 'color': '0.5'},
-            capprops    ={'linewidth': 0.5, 'color': '0.5'},
-            flierprops  ={'marker': 'o', 'mew': 0.5, 'ms': 2, 'color': '0.5'},
-            medianprops ={'color': '0.5'},
-            meanprops   ={'marker': '^', 'mfc': 'k', 'mew': 0, 'mec': 'k',
-                          'alpha': 1, 'ms': 5},
-            showmeans=True,
-        )
-    else:
-        for rank, i in enumerate(sorted_idx):
-            scores  = result.importances[i]
-            kw      = dict(marker='.', mec='none', mfc='0.5', lw=0, alpha=0.5)
-            label_s = 'score' if rank == 0 else '_'
-            label_m = 'mean'  if rank == 0 else '_'
-            ax.plot(scores, np.full(len(scores), rank), label=label_s, **kw)
-            ax.plot(scores.mean(), rank, marker='|', mec='k', mfc='none',
-                    lw=0, alpha=1, label=label_m)
-
-    ax.set_yticks(np.arange(len(X.columns)))
-    ax.set_yticklabels([X.columns[i] for i in sorted_idx], fontsize=7)
+    ax = _plot_importance_scores(
+        ax, result.importances, list(X.columns), box=box
+    )
 
     return ax, result.importances_mean
+
+
+def compute_grouped_permutation_importance(
+    reg,
+    X: pd.DataFrame,
+    y: pd.DataFrame,
+    ax,
+    groups: list,
+    n_repeats: int = 10,
+    random_state: int = 42,
+    box: bool = False,
+    target_col: str | None = None,
+) -> tuple:
+    """Compute and plot permutation importance over groups of columns.
+
+    Each group is permuted as a unit: one row ordering is drawn per repeat and
+    applied to every column in the group, so correlations within the group are
+    preserved while the group's relationship to the targets is destroyed.  The
+    importance of a group is the mean drop in the scorer's value relative to
+    the unpermuted baseline.
+
+    A group of one column is the ordinary single-column permutation, so a run
+    in which every group is a singleton reproduces
+    ``compute_permutation_importance`` up to the random draw.  Grouping matters
+    when two columns are collinear: permuting either one alone leaves the model
+    able to recover the signal from the other, which understates both.
+
+    The model is never retrained — only prediction and scoring occur.
+
+    Parameters
+    ----------
+    reg : fitted Pipeline
+        A fitted scikit-learn Pipeline (StandardScaler + regressor) as stored
+        in ``results[model]['final_model']['regressor']``.
+    X : pd.DataFrame
+        Reduced test feature matrix.
+    y : pd.DataFrame
+        log10-transformed test targets.  Always the full multi-column
+        DataFrame regardless of ``target_col`` — the model requires all
+        target columns for prediction.
+    ax : matplotlib Axes
+        Axes object to plot importance scores into.
+    groups : list of list of str
+        Permutation groups.  Every column of ``X`` must appear in exactly one
+        group.  Row order of the returned importances matches ``groups``.
+    n_repeats : int
+        Number of permutation repeats per group.
+    random_state : int
+        Seed for the permutation draws.
+    box : bool
+        Passed to ``_plot_importance_scores``.
+    target_col : str or None
+        If None, scoring uses mean R2 across all targets, matching the
+        multi-output CV scoring used in nested CV.  If a column name, scoring
+        uses R2 for that target only.
+
+    Returns
+    -------
+    ax : matplotlib Axes
+        The axes with importance scores plotted.
+    importances_mean : np.ndarray of shape (n_groups,)
+        Mean importance per group across repeats, ordered to match ``groups``.
+    """
+    if target_col is not None:
+        scoring = _make_single_target_scorer(list(y.columns).index(target_col))
+    else:
+        scoring = _mean_target_scorer
+
+    baseline = scoring(reg, X, y)
+    rng      = np.random.default_rng(random_state)
+    n_rows   = len(X)
+
+    importances = np.empty((len(groups), n_repeats))
+    for g, cols in enumerate(groups):
+        block = X[cols].to_numpy()
+        for r in range(n_repeats):
+            X_perm = X.copy()
+            # One ordering for the whole block: within-group structure is
+            # retained, the group's alignment with y is not.
+            X_perm[cols] = block[rng.permutation(n_rows)]
+            importances[g, r] = baseline - scoring(reg, X_perm, y)
+
+    labels = ['+'.join(c) for c in groups]
+    ax     = _plot_importance_scores(ax, importances, labels, box=box)
+
+    return ax, importances.mean(axis=1)
 
 
 def analyze_feature_importance(
@@ -580,6 +777,7 @@ def analyze_feature_importance(
     random_state: int = 42,
     box: bool = False,
     target_col: str | None = None,
+    groups: list | None = None,
 ) -> pd.DataFrame:
     """Compute permutation importance for all models and aggregate ranks.
 
@@ -619,20 +817,32 @@ def analyze_feature_importance(
     box : bool
         Passed to ``compute_permutation_importance``.
     target_col : str or None
-        Passed to ``compute_permutation_importance``.
+        Passed to the permutation routine.
         None -> mean R2 across all targets (combined / 'all' run).
         A column name -> single-target R2.
+    groups : list of list of str or None
+        If None (default), each feature in ``reduced_features`` is permuted
+        singly via ``compute_permutation_importance``.  If supplied, the
+        columns of each group are permuted together via
+        ``compute_grouped_permutation_importance``, and each table row is a
+        group labelled by its members joined with ``+``.  Every feature in
+        ``reduced_features`` must appear in exactly one group.
 
     Returns
     -------
     pd.DataFrame
-        Index: ``reduced_features``.
+        Index: ``reduced_features``, or the group labels when ``groups`` is
+        supplied.
         Columns: one rank column per algorithm, plus ``median_rank``,
         ``rank_std``, and ``related features`` (comma-separated cluster
-        companions).  Sorted by ``median_rank`` then ``rank_std``.
-        Also saved to a CSV file in ``output_dir``.
+        companions; for a group, the union of its members' companions
+        excluding the members themselves).  Sorted by ``median_rank`` then
+        ``rank_std``.  Also saved to a CSV file in ``output_dir``.
     """
     target_tag = f'-{target_col}' if target_col is not None else '-all'
+    mode_tag   = '-grouped' if groups is not None else ''
+    row_labels = (list(reduced_features) if groups is None
+                  else ['+'.join(g) for g in groups])
 
     models = [k for k in results.keys() if k != '_meta']
     fig, axes = plt.subplots(
@@ -641,17 +851,24 @@ def analyze_feature_importance(
     )
     axes = axes.flatten()
 
-    feat_imp_df = pd.DataFrame(index=reduced_features)
+    feat_imp_df = pd.DataFrame(index=row_labels)
 
     for i, model in enumerate(models):
         print(f"\nPermutation importance [{target_col or 'all'}]: {model}")
         reg = results[model]['final_model']['regressor']
 
-        axes[i], imp_mean = compute_permutation_importance(
-            reg, X_test, y_test, axes[i],
-            n_repeats=n_repeats, random_state=random_state, box=box,
-            target_col=target_col,
-        )
+        if groups is None:
+            axes[i], imp_mean = compute_permutation_importance(
+                reg, X_test, y_test, axes[i],
+                n_repeats=n_repeats, random_state=random_state, box=box,
+                target_col=target_col,
+            )
+        else:
+            axes[i], imp_mean = compute_grouped_permutation_importance(
+                reg, X_test, y_test, axes[i], groups=groups,
+                n_repeats=n_repeats, random_state=random_state, box=box,
+                target_col=target_col,
+            )
         feat_imp_df[model] = imp_mean
         feat_imp_df[model] = feat_imp_df[model].rank(ascending=False)
 
@@ -668,7 +885,8 @@ def analyze_feature_importance(
     fig.tight_layout()
 
     stem = os.path.join(
-        output_dir, f'feature-importance{target_tag}-{label_tag}-{git_hash}'
+        output_dir,
+        f'feature-importance{mode_tag}{target_tag}-{label_tag}-{git_hash}'
     )
     fig.savefig(stem + '.png', dpi=300)
     fig.savefig(stem + '.svg')
@@ -682,20 +900,29 @@ def analyze_feature_importance(
         feat_imp_df.sort_values(['median_rank', 'rank_std']), 1
     )
 
-    # Annotate with cluster companions; break after first match since each
-    # feature belongs to exactly one cluster.
-    for rfeat in feat_imp_df.index:
-        for key, val in cluster_id_to_feature_ids.items():
-            cluster_names = [all_features[v] for v in val]
-            if rfeat in cluster_names:
-                companions = [n for n in cluster_names if n != rfeat]
-                feat_imp_df.loc[rfeat, 'related features'] = ', '.join(companions)
-                break
+    # Annotate with cluster companions.  Each feature belongs to exactly one
+    # cluster; a group row carries the union of its members' companions with
+    # the members themselves excluded.
+    feature_to_companions = {}
+    for feat_ids in cluster_id_to_feature_ids.values():
+        cluster_names = [all_features[v] for v in feat_ids]
+        for name in cluster_names:
+            feature_to_companions[name] = [n for n in cluster_names
+                                           if n != name]
+
+    row_members = ({f: [f] for f in row_labels} if groups is None
+                   else dict(zip(row_labels, groups)))
+    for row, member_feats in row_members.items():
+        companions = []
+        for feat in member_feats:
+            companions += [c for c in feature_to_companions.get(feat, [])
+                           if c not in member_feats and c not in companions]
+        feat_imp_df.loc[row, 'related features'] = ', '.join(companions)
 
     feat_imp_df.to_csv(
         os.path.join(
             output_dir,
-            f'feature-importance{target_tag}-{label_tag}-{git_hash}.csv'
+            f'feature-importance{mode_tag}{target_tag}-{label_tag}-{git_hash}.csv'
         )
     )
     return feat_imp_df
@@ -781,6 +1008,60 @@ def plot_top_features_vs_targets(
 
 
 # =============================================================================
+# Permutation groups
+# =============================================================================
+
+def build_feature_groups(group_specs: list, reduced_features: list) -> list:
+    """Expand ``--feature-groups`` into one permutation group per table row.
+
+    Each spec is a ``+``-joined list of feature names forming one group.  Every
+    feature of ``reduced_features`` not named in a spec becomes a group of its
+    own, so the returned groups partition the reduced feature set and the
+    resulting table has a row for every feature exactly once.
+
+    Parameters
+    ----------
+    group_specs : list of str
+        Specs as supplied on the command line, e.g. ``['Rl0+Rb0']``.
+    reduced_features : list of str
+        The reduced feature set the groups are drawn from.
+
+    Returns
+    -------
+    list of list of str
+        Explicit groups in the order given, followed by the remaining features
+        as singletons in ``reduced_features`` order.
+
+    Raises
+    ------
+    ValueError
+        If a named feature is absent from ``reduced_features``, or if any
+        feature is named in more than one group.
+    """
+    groups = [spec.split('+') for spec in group_specs]
+    named  = [f for g in groups for f in g]
+
+    missing = [f for f in named if f not in reduced_features]
+    if missing:
+        raise ValueError(
+            f"--feature-groups names features that are not in the reduced "
+            f"feature set: {missing}\n"
+            f"Available: {list(reduced_features)}"
+        )
+
+    repeated = sorted({f for f in named if named.count(f) > 1})
+    if repeated:
+        raise ValueError(
+            f"--feature-groups names the same feature in more than one group: "
+            f"{repeated}\nEach feature may belong to at most one group."
+        )
+
+    grouped = set(named)
+    singles = [[f] for f in reduced_features if f not in grouped]
+    return groups + singles
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -796,6 +1077,8 @@ def parse_args():
             '             importance.\n'
             '  importance Permutation importance only on existing reduced-feature\n'
             '             models.  No training or clustering performed.\n'
+            '  grouped    As importance, but the features named in\n'
+            '             --feature-groups are permuted jointly.\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -850,7 +1133,7 @@ def parse_args():
     # ── Mode ──────────────────────────────────────────────────────────────────
     p.add_argument(
         '--mode',
-        choices=['explore', 'reduced', 'importance'],
+        choices=['explore', 'reduced', 'importance', 'grouped'],
         default='importance',
         help=(
             'Analysis mode (default: importance).  '
@@ -859,7 +1142,10 @@ def parse_args():
             'importance, requires --models-pkl (full-feature) and '
             '--reduced-models-pkl (output path).  '
             'importance: permutation importance only on existing reduced-feature '
-            'models, requires --models-pkl (reduced-feature).'
+            'models, requires --models-pkl (reduced-feature).  '
+            'grouped: as importance, but the features named in '
+            '--feature-groups are permuted jointly rather than one at a time; '
+            'requires --models-pkl (reduced-feature) and --feature-groups.'
         ),
     )
 
@@ -931,6 +1217,21 @@ def parse_args():
             'reduced modes.  Stored in the reduced pkl _meta for reproducibility.'
         ),
     )
+    p.add_argument(
+        '--allow-cluster-collisions',
+        action='store_true',
+        help=(
+            'Permit two or more --domain-features to fall in the same cluster '
+            'at --cluster-threshold.  Without this flag such a collision '
+            'raises an error.  With it, the collisions are printed and the '
+            'supplied feature list is used unchanged, which is required when '
+            'a feature set fixed on one dataset is carried onto another whose '
+            'correlation structure differs.  Does not suppress the error '
+            'raised when a named feature is absent from the loaded feature '
+            'set.  Used in explore and reduced modes; in importance mode the '
+            'value recorded in the pkl _meta takes precedence.'
+        ),
+    )
 
     # ── Permutation importance (reduced and importance modes) ──────────────────
     p.add_argument(
@@ -942,6 +1243,23 @@ def parse_args():
             'importance computation (default: 10).  More repeats reduce variance '
             'in the importance estimates at the cost of computation time.  '
             'Only used in reduced and importance modes.'
+        ),
+    )
+    p.add_argument(
+        '--feature-groups',
+        nargs='+',
+        default=None,
+        help=(
+            'Whitespace-separated list of permutation groups, each a '
+            '+-joined list of feature names, e.g. Rl0+Rb0 Z_cv+Z_mean.  The '
+            'columns of a group are permuted as a unit, one row ordering per '
+            'repeat applied to all of them, so correlations within the group '
+            'survive while its alignment with the targets does not.  Features '
+            'not named here are permuted singly, so the table remains '
+            'comparable to that of --mode importance.  Each feature may '
+            'belong to at most one group and must be present in the reduced '
+            'feature set.  Required when --mode grouped is set; ignored '
+            'otherwise.'
         ),
     )
     p.add_argument(
@@ -977,6 +1295,8 @@ def parse_args():
             and args.cluster_selection == 'domain'
             and args.domain_features is None):
         p.error("--cluster-selection domain requires --domain-features")
+    if args.mode == 'grouped' and args.feature_groups is None:
+        p.error("--mode grouped requires --feature-groups")
 
     return args
 
@@ -1059,6 +1379,7 @@ def main():
             cluster_selection=args.cluster_selection,
             domain_features=args.domain_features,
             random_state=args.random_state,
+            enforce_one_per_cluster=not args.allow_cluster_collisions,
         )
         print(f"\nDendrogram saved to {args.output_dir}")
         return
@@ -1107,6 +1428,7 @@ def main():
             cluster_selection=args.cluster_selection,
             domain_features=args.domain_features,
             random_state=args.random_state,
+            enforce_one_per_cluster=not args.allow_cluster_collisions,
         )
         X_train_red = X_train[reduced_features]
         X_test_red  = X_test[reduced_features]
@@ -1155,6 +1477,7 @@ def main():
             'cluster_threshold':     args.cluster_threshold,
             'cluster_selection':     args.cluster_selection,
             'domain_features':       args.domain_features,
+            'allow_cluster_collisions': args.allow_cluster_collisions,
             'full_models_pkl':       args.models_pkl,
         }
 
@@ -1187,9 +1510,11 @@ def main():
 
         results_for_importance = red_results
 
-    # ── IMPORTANCE mode ────────────────────────────────────────────────────────
+    # ── IMPORTANCE and GROUPED modes ───────────────────────────────────────────
+    # Both read an existing reduced-feature pkl and differ only in whether the
+    # permutation is applied to single columns or to groups of them.
     else:
-        print("\n── Mode: importance ──")
+        print(f"\n── Mode: {args.mode} ──")
 
         # Verify the pkl contains final models
         model_keys    = [k for k in results if k != '_meta']
@@ -1199,7 +1524,8 @@ def main():
             raise ValueError(
                 f"The following models in --models-pkl have no final_model entry: "
                 f"{missing_final}\n"
-                f"Re-run with --mode reduced to train final reduced-feature models."
+                f"Re-run with --mode reduced to train final reduced-feature "
+                f"models."
             )
 
         # Recover reduced feature names from _meta
@@ -1225,6 +1551,8 @@ def main():
             cluster_selection=meta.get('cluster_selection', args.cluster_selection),
             domain_features=meta.get('domain_features', args.domain_features),
             random_state=args.random_state,
+            enforce_one_per_cluster=not meta.get(
+                'allow_cluster_collisions', args.allow_cluster_collisions),
         )
         X_train_red = X_train[reduced_features]
         X_test_red  = X_test[reduced_features]
@@ -1246,6 +1574,16 @@ def main():
     if len(target_cols) > 1:
         target_cols = target_cols + [None]
 
+    # Groups are resolved against the reduced feature set settled above, so
+    # that a misnamed feature fails before any permutation is run.
+    groups = None
+    if args.mode == 'grouped':
+        groups = build_feature_groups(args.feature_groups, reduced_features)
+        multi  = [g for g in groups if len(g) > 1]
+        print(f"\nPermutation groups ({len(groups)} rows): "
+              f"{['+'.join(g) for g in multi]} "
+              f"+ {len(groups) - len(multi)} singletons")
+
     for target_col in target_cols:
         tag_label = target_col if target_col is not None else 'all'
         print(f"\n{'='*60}")
@@ -1266,20 +1604,25 @@ def main():
             n_repeats=args.permutation_repeats,
             random_state=args.random_state,
             target_col=target_col,
+            groups=groups,
         )
 
         print(f"\n── Feature importance [{tag_label}] (median rank) ──")
         print(feat_imp_df[['median_rank', 'rank_std', 'related features']].to_string())
 
-        plt.close('all')
-        plot_top_features_vs_targets(
-            X_train_red, y_train, feat_imp_df,
-            top_n=args.top_features,
-            output_dir=args.output_dir,
-            git_hash=git_hash,
-            label_tag=label_tag,
-            target_col=target_col,
-        )
+        # The scatter plots index X_train_red by the table's row labels, which
+        # are group labels rather than column names when groups are in use.
+        # The single-column run of the same models already produces them.
+        if groups is None:
+            plt.close('all')
+            plot_top_features_vs_targets(
+                X_train_red, y_train, feat_imp_df,
+                top_n=args.top_features,
+                output_dir=args.output_dir,
+                git_hash=git_hash,
+                label_tag=label_tag,
+                target_col=target_col,
+            )
 
 
 if __name__ == '__main__':
