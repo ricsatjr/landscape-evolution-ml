@@ -102,7 +102,7 @@ do grouped permutation for collinear features in n01
 `python pipeline/04_feature_importance.py     --mode grouped     --features-dir data/features/n01     --models-pkl data/models/n01/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-b2384de.pkl     --output-dir data/models/n01/ratio/reduced/grouped-features     --feature-groups Rl0+Rb0`
 
 apply similar grouped permutation to n10 for comparability with n01
-`python pipeline/04_feature_importance.py     --mode grouped     --features-dir data/features/n10/     --models-pkl data/models/n10/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-2e0a16b.pkl     --output-dir data/models/n10/ratio/grouped-features     --feature-groups Rl0+Rb0`
+`python pipeline/04_feature_importance.py     --mode grouped     --features-dir data/features/n10/     --models-pkl data/models/n10/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-2e0a16b.pkl     --output-dir data/models/n10/ratio/reduced/grouped-features --feature-groups Rl0+Rb0`
 
 
 
