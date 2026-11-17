@@ -75,7 +75,7 @@ Adoption in normalized time and elevation
                 - min over tau >= t* of z*(tau)
 
     which is non-increasing by construction, since extending the interval
-    backwards can only widen the range.  ``range_rel`` is R at the start of
+    backwards can only widen the range.  ``R_w`` is R at the start of
     the final window and is the criterion.  R is a range in elevation over an
     interval in time; the interval is the window, the range is what is
     measured across it.
@@ -99,11 +99,11 @@ Adoption in normalized time and elevation
 
     and because R is monotone the first and last such t* coincide, so no
     first-versus-last rule is needed.  A deviation measured from a fixed
-    reference would need one, since these landscapes overshoot their final
-    value (by ~2% near t* = 0.3) and so pass through it on the way up.  For
-    the same reason a "fraction of total change completed" measure is not
-    used: with an overshoot it is not monotone in t* and its interpretation
-    fails.
+    reference would need one, since these landscapes overshoot their
+    reference level (by ~2% near t* = 0.3) and so pass through it on the way
+    up.  For the same reason a "fraction of total change completed" measure
+    is not used: with an overshoot it is not monotone in t* and its
+    interpretation fails.
 
 3.  Reported alongside, as plain differences of the series, with no model
     fitted and no statistical test applied:
@@ -118,7 +118,7 @@ Adoption in normalized time and elevation
     output carries the full distribution of R, Ts, dz_max and mono, so a
     reader can apply any level they like.
 
-        verified      range_rel < delta
+        verified      R_w < delta
         not verified  range at or above delta, or series untestable
 
     What this establishes is that the mean elevation varies by less than delta
@@ -127,6 +127,32 @@ Adoption in normalized time and elevation
     asymptotic state: a window can be narrow while still drifting slowly, so
     its own values need not bracket the asymptote, and the remaining approach
     cannot be estimated reliably from a trajectory of this length.
+
+Symbols
+-------
+The manuscript and the code name some quantities differently, deliberately:
+the code keeps the identifiers already established in
+``01_generate_landscapes.py`` and in DATA_PROVENANCE.md, which is the
+published provenance record of the generated data.  The mapping is therefore
+maintained here rather than by renaming on either side.
+
+    Manuscript      Code                      Defined in
+    -----------------------------------------------------
+    t_c = 1/K_s     tc                        01
+    T_ss            T_ss, column 'T'          01
+    k               T_TC, t_tc                01
+    t*              tn                        01c
+    z*              zn                        01c
+    z_ref           z_ref                     01c
+    w, n_w          final_window              01c
+    R(t*)           R                         01c
+    R_w             R_w                       01c
+    delta           delta                     01c
+
+``k`` is the number of characteristic timescales a run is evolved for, so
+T_ss = k t_c = k / K_s.  The code writes it ``T_TC`` because that reads as
+T_ss expressed in units of t_c.  ``n_w`` is the length of the final window w
+in time steps; the code carries only the length, as ``final_window``.
 
 Usage
 -----
@@ -137,17 +163,17 @@ Usage
         --series ts_max_elevs --out-dir data/landscapes/steady-state
 
     python pipeline/01c_check_steady_state.py --params-dir data/landscapes \
-        --fit-window 10 --draw-curves --out-dir data/landscapes/steady-state
+        --final-window 10 --draw-curves --out-dir data/landscapes/steady-state
 
 Output
 ------
-    steady-state-{series}-f{fit}-{reference}-{hash}.csv
+    steady-state-{series}-f{n_w}-{reference}-{hash}.csv
         One row per landscape: remaining range, settling times, per-step rate,
         monotonicity, overshoot, and ``verified``.  No fitted slope, p-value
         or significance flag is written: the method uses differences of the
         recorded series only.
 
-    steady-state-{series}-f{fit}-{reference}-{hash}-retained.csv
+    steady-state-{series}-f{n_w}-{reference}-{hash}-retained.csv
         The landscapes that passed, as (job_id, landscape_idx, ts_index) plus
         the measured range.  This is the selection list for downstream
         processing: those three columns are the refactored identifiers used
@@ -156,15 +182,18 @@ Output
         parameter files are renamed on load, so the manifest is always in the
         refactored convention regardless of the input.
 
-    steady-state-{series}-f{fit}-{reference}-{hash}-excluded.csv
+    steady-state-{series}-f{n_w}-{reference}-{hash}-excluded.csv
         The landscapes that failed verification, with the reason, keyed the
         same way.  Both manifests are suppressed by ``--no-manifest``.
 
-    steady-state-{series}-f{fit}-{reference}-{hash}.png
+    steady-state-{series}-f{n_w}-{reference}-{hash}.png
         Panel a, normalized trajectories; panel b, R(t*).  Both as quantile
-        envelopes, with the evaluated interval shaded in each.
+        envelopes, with the evaluated interval shaded in each.  Panel b
+        carries an inset over t* >= INSET_T0, which resolves the approach to
+        the final window without cropping the outer axes, with delta drawn
+        in it.
 
-    steady-state-{series}-f{fit}-{reference}-{hash}-space.png
+    steady-state-{series}-f{n_w}-{reference}-{hash}-space.png
         The verification outcome across the (U/Ks, Kh/Ks) plane, with the full
         ensemble shown so that the retained coverage is visible.  Suppressed
         by ``--no-space-plot``.
@@ -227,6 +256,17 @@ CARRY_COLS = ('u', 'kh', 'ks', 'ly', 'dx', 'T', 'hc', 'lc')
 
 # Containment levels reported for every landscape and drawn on the figure.
 LEVELS = (1e-2, 3e-3, 1e-3, 3e-4, 1e-4)
+
+# Leading output columns: identity, status, then the criterion in the order it
+# is reported in the manuscript, then the diagnostics. Settling times, carried
+# LE parameters and their ratios follow; see ``order_columns``.
+COLUMN_ORDER = (
+    'job_id', 'landscape_idx', 'ts_index',
+    'status', 'n_ts', 'exclusion_reason',
+    'z_ref', 't_w', 'R_w', 'narrow', 'verified',
+    'dz_max', 'dz_last', 'mono', 'end_pos', 'overshoot', 't_peak',
+    'res_floor', 'range_over_floor',
+)
 
 # Elevation summaries are stored by 01_generate_landscapes.py with
 # np.round(..., 3), so the half-ULP resolution of the recorded series is this
@@ -344,7 +384,7 @@ def load_params(params_dir: str, job_ids: list = None) -> pd.DataFrame:
 # CONVERGENCE TEST
 # =============================================================================
 
-def reference_level(z: np.ndarray, reference: str, norm_window: int) -> float:
+def reference_level(z: np.ndarray, reference: str, ref_window: int) -> float:
     """Return the level against which the deviation is measured.
 
     Parameters
@@ -353,8 +393,8 @@ def reference_level(z: np.ndarray, reference: str, norm_window: int) -> float:
         Raw elevation series (m).
     reference : {'final', 'window-mean'}
         ``final`` uses z(t*=1), the snapshot feature extraction operates on.
-        ``window-mean`` uses the mean of the last ``norm_window`` points.
-    norm_window : int
+        ``window-mean`` uses the mean of the last ``ref_window`` points.
+    ref_window : int
         Trailing points averaged when ``reference='window-mean'``.
 
     Returns
@@ -363,25 +403,40 @@ def reference_level(z: np.ndarray, reference: str, norm_window: int) -> float:
 
     Notes
     -----
-    ``final`` is the default for a reason that makes the choice immaterial
-    where it applies: over a window that varies in a single direction the
-    final value is an endpoint, so G below becomes the window's normalized
-    range, (max - min)/z_ref, which is independent of which member is taken as
-    the reference. A window mean sits partway inside the interval and returns
-    less than the range by an amount that depends on where it sits. Whether
-    the windows are in fact one-directional is measured, not assumed: the
-    ``mono`` column reports it per landscape.
+    The criterion is a range, hence a difference, so this level fixes a unit
+    and introduces no zero point on which the verdict could depend.  Since
+    z* = z / z_ref is a pure scaling, the reference enters R_w only through
+    the denominator,
 
-    The usual argument for a trailing mean is robustness to single-point
-    noise, which does not apply here: the lag-1 autocorrelation of the first
-    differences over the tail is strongly positive (~0.9), indicating smooth
-    variation rather than step-to-step jitter, and the 3-decimal storage
-    resolution is of order 1e-6 relative.
+        R_w = (max over the window of z - min over the window of z) / z_ref
+
+    and both candidates lie inside the window: z(t*=1) is a member of it and
+    the window mean lies in its convex hull.  Their separation is therefore
+    at most the raw range itself, so the two choices differ in relative terms
+    by at most R_w, which at the observed median moves the fifth significant
+    figure and is orders of magnitude below any usable delta.  A landscape
+    can only change verdict if its R_w lies within a relative R_w of delta.
+
+    ``window-mean`` is the default because the reference is then a property
+    of the interval being tested rather than of a single stored snapshot, and
+    because it is the level reported in the manuscript.  The equivalence
+    above, not a difference in robustness, is what makes the choice safe: the
+    usual argument for a trailing mean is insensitivity to single-point noise,
+    and that argument does not apply here, since the lag-1 autocorrelation of
+    the first differences over the final window is strongly positive (~0.9),
+    indicating smooth variation rather than step-to-step jitter, and the
+    3-decimal storage resolution is of order 1e-6 relative.
+
+    Under ``final`` the window's final value is an endpoint of its own range
+    whenever the window varies in a single direction, so R_w is then also the
+    normalized deviation from the reference.  Whether the windows are in fact
+    one-directional is measured, not assumed: the ``mono`` column reports it
+    per landscape.
     """
     if reference == 'final':
         return float(z[-1])
     if reference == 'window-mean':
-        return float(np.mean(z[-norm_window:]))
+        return float(np.mean(z[-ref_window:]))
     raise ValueError(f"unknown reference '{reference}'")
 
 
@@ -440,7 +495,7 @@ def settling_time(R: np.ndarray, level: float) -> float:
     return float((inside[0] + 1) / n)
 
 
-def test_landscape(z, reference: str, norm_window: int, fit_window: int,
+def test_landscape(z, reference: str, ref_window: int, final_window: int,
                    levels=LEVELS) -> dict:
     """Characterize the approach to steady state for one elevation series.
 
@@ -451,10 +506,10 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
         ``params-*.pkl``. None for a landscape that was never evolved.
     reference : {'final', 'window-mean'}
         Passed to ``reference_level``.
-    norm_window : int
+    ref_window : int
         Trailing points averaged when ``reference='window-mean'``.
-    fit_window : int
-        Trailing points forming the tail window, over which G, dz_max and
+    final_window : int
+        Trailing points forming the final window, over which R_w, dz_max and
         mono are evaluated.
     levels : sequence of float
         Containment levels at which settling times are reported.
@@ -465,16 +520,16 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
         Diagnostics for one landscape. ``status`` is 'ok' when the test ran,
         'missing' when no series was stored, or 'invalid' when the stored
         series is too short or unusable. Numeric fields are NaN unless status
-        is 'ok'. ``curves`` holds (z_norm, dev, G) for plotting, or None.
+        is 'ok'. ``curves`` holds (zn, R) for plotting, or None.
 
     Notes
     -----
-    ``range_rel`` is the range over exactly the window used for the per-step
+    ``R_w`` is the range over exactly the window used for the per-step
     statistics, so the two describe the same interval.
     """
     out = {
-        'status': 'ok', 'n_ts': 0, 'ts_index': -1, 'z_scale': np.nan,
-        'range_rel': np.nan, 't_fit': np.nan,
+        'status': 'ok', 'n_ts': 0, 'ts_index': -1, 'z_ref': np.nan,
+        'R_w': np.nan, 't_w': np.nan,
         'dz_max': np.nan, 'dz_last': np.nan, 'mono': np.nan,
         'end_pos': np.nan, 'overshoot': np.nan, 't_peak': np.nan,
         'res_floor': np.nan, 'range_over_floor': np.nan, 'curves': None,
@@ -493,43 +548,43 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
     # convention and the ts_index column of the features table.
     out['ts_index'] = n - 1
 
-    if n < max(fit_window, norm_window, 3) or not np.isfinite(z).all():
+    if n < max(final_window, ref_window, 3) or not np.isfinite(z).all():
         out['status'] = 'invalid'
         return out
 
-    z_scale = reference_level(z, reference, norm_window)
-    if not np.isfinite(z_scale) or z_scale == 0.0:
+    z_ref = reference_level(z, reference, ref_window)
+    if not np.isfinite(z_ref) or z_ref == 0.0:
         out['status'] = 'invalid'
         return out
 
-    t = (np.arange(n) + 1) / n
-    zn = z / z_scale
+    tn = (np.arange(n) + 1) / n
+    zn = z / z_ref
     R = running_range(zn)
 
-    i0 = n - fit_window                      # first index of the tail window
+    i_w = n - final_window           # first index of the final window
 
-    steps = np.abs(np.diff(zn[i0:]))
+    steps = np.abs(np.diff(zn[i_w:]))
     total_variation = float(steps.sum())
 
-    out['z_scale'] = z_scale
-    out['range_rel'] = float(R[i0])
-    out['t_fit'] = float(t[i0])
+    out['z_ref'] = z_ref
+    out['R_w'] = float(R[i_w])
+    out['t_w'] = float(tn[i_w])
     out['dz_max'] = float(steps.max())
     out['dz_last'] = float(steps[-1])
     # Exactly 1 where the window varies in a single direction, below 1 where
     # it reverses: a reversing window travels further than its own range.
-    out['mono'] = (float(R[i0] / total_variation)
+    out['mono'] = (float(R[i_w] / total_variation)
                    if total_variation > 0 else np.nan)
 
     # Where the final value sits within the window: 0 at its minimum, 1 at
     # its maximum, between the two where the window reverses.
-    lo, hi = float(zn[i0:].min()), float(zn[i0:].max())
+    lo, hi = float(zn[i_w:].min()), float(zn[i_w:].max())
     out['end_pos'] = (float((zn[-1] - lo) / (hi - lo)) if hi > lo else np.nan)
     out['overshoot'] = float(zn.max() - 1.0)
-    out['t_peak'] = float(t[int(np.argmax(zn))])
+    out['t_peak'] = float(tn[int(np.argmax(zn))])
 
-    out['res_floor'] = STORAGE_RESOLUTION_M / z_scale
-    out['range_over_floor'] = out['range_rel'] / out['res_floor']
+    out['res_floor'] = STORAGE_RESOLUTION_M / z_ref
+    out['range_over_floor'] = out['R_w'] / out['res_floor']
 
     for lv in levels:
         out[f'Ts_{lv:g}'] = settling_time(R, lv)
@@ -539,7 +594,7 @@ def test_landscape(z, reference: str, norm_window: int, fit_window: int,
 
 
 def check_ensemble(df: pd.DataFrame, series: str, reference: str,
-                   norm_window: int, fit_window: int, delta: float) -> tuple:
+                   ref_window: int, final_window: int, delta: float) -> tuple:
     """Apply ``test_landscape`` to every row of a parameter table.
 
     Parameters
@@ -548,7 +603,7 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
         Concatenated parameter table, keys already normalized.
     series : str
         Column holding the elevation time series to test.
-    reference, norm_window, fit_window
+    reference, ref_window, final_window
         Passed through to ``test_landscape``.
     delta : float
         Range below which a window counts as verified.
@@ -558,7 +613,7 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
     res : pd.DataFrame
         One row per landscape, keyed on job_id and landscape_idx.
     curves : dict
-        ``{'zn': (m, n) array, 'dev': ..., 'G': ...}`` for the testable
+        ``{'zn': (m, n) array, 'R': (m, n) array}`` for the testable
         landscapes, in the row order of ``res[res.status == 'ok']``, or None
         if nothing was testable.
     """
@@ -569,7 +624,7 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
         rec = {'job_id': int(row['job_id']),
                'landscape_idx': int(row['landscape_idx'])}
         rec.update({c: row[c] for c in carry})
-        d = test_landscape(row[series], reference, norm_window, fit_window)
+        d = test_landscape(row[series], reference, ref_window, final_window)
         cur = d.pop('curves')
         if cur is not None:
             zn_s.append(cur[0])
@@ -581,7 +636,7 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
 
     ok = res['status'] == 'ok'
     res['narrow'] = pd.NA
-    res.loc[ok, 'narrow'] = res.loc[ok, 'range_rel'] < delta
+    res.loc[ok, 'narrow'] = res.loc[ok, 'R_w'] < delta
     res['narrow'] = res['narrow'].astype('boolean')
 
     # Membership of the study population. A landscape is verified when its
@@ -601,7 +656,36 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
     curves = None
     if zn_s:
         curves = {'zn': np.vstack(zn_s), 'R': np.vstack(R_s)}
-    return res, curves
+    return order_columns(res), curves
+
+
+def order_columns(res: pd.DataFrame) -> pd.DataFrame:
+    """Reorder the result columns for reading against the manuscript.
+
+    Parameters
+    ----------
+    res : pd.DataFrame
+        Per-landscape results from ``check_ensemble``.
+
+    Returns
+    -------
+    pd.DataFrame
+        The same frame with ``COLUMN_ORDER`` first, then the settling times,
+        the carried LE parameters and their ratios.
+
+    Notes
+    -----
+    Any column in neither group is appended rather than dropped, so adding a
+    statistic without touching ``COLUMN_ORDER`` cannot silently lose it from
+    the output.
+    """
+    lead = [c for c in COLUMN_ORDER if c in res.columns]
+    ts = [c for c in res.columns if c.startswith('Ts_')]
+    carry = [c for c in CARRY_COLS if c in res.columns]
+    ratios = [c for c in ('u_ks', 'kh_ks') if c in res.columns]
+    placed = set(lead + ts + carry + ratios)
+    rest = [c for c in res.columns if c not in placed]
+    return res[lead + ts + carry + ratios + rest]
 
 
 # =============================================================================
@@ -610,12 +694,16 @@ def check_ensemble(df: pd.DataFrame, series: str, reference: str,
 
 C_ENS = '#2a78d6'   # ensemble bands and median; also the verified points
 C_FAIL = '#e34948'  # excluded landscapes; validated against C_ENS for CVD
-C_WIN = '#ecebe6'   # shading for the evaluated interval
+C_WIN = '0.8'   # shading for the evaluated interval
 
 
 # Lower limit of the log axis in panel b. Ranges below this are far smaller
 # than any level of interest and would stretch the axis over empty decades.
 Y_FLOOR = 1e-5
+
+# Left edge of the panel b inset, which resolves the approach to the final
+# window without cropping the outer axes.
+INSET_T0 = 0.8
 INK, INK2, GRID = '#0b0b0b', '#52514e', '#d9d8d3'
 
 
@@ -695,8 +783,8 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     ok = res[res['status'] == 'ok'].reset_index(drop=True)
     Z, R = curves['zn'], curves['R']
     m, n = Z.shape
-    t = (np.arange(n) + 1) / n
-    t0 = float(ok['t_fit'].iloc[0])
+    tn = (np.arange(n) + 1) / n
+    t_w = float(ok['t_w'].iloc[0])
     draw = args.draw_curves if args.draw_curves is not None else (m < BAND_MIN_N)
     guides = [lv for lv in levels if lv >= 3e-4]
 
@@ -704,22 +792,24 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     for ax in (ax_a, ax_b):
         ax.grid(True, color=GRID, lw=0.4, zorder=0)
         ax.set_axisbelow(True)
-        for sp in ('top', 'right'):
+        for sp in ('top',):
             ax.spines[sp].set_visible(False)
         ax.set_xlim(0, 1.0)
-        ax.set_xlabel('normalized time  $t^* = t/T_{ss}$')
+        ax.set_xlabel('$t^*$')
 
     def _window(ax):
         """Shade the interval over which the criterion is evaluated."""
-        ax.add_patch(Rectangle((t0, 0), 1.0 - t0, 1, transform=ax.get_xaxis_transform(),
+        ax.add_patch(Rectangle((t_w, 0), 1 - t_w, 1,
+                               transform=ax.get_xaxis_transform(),
                                facecolor=C_WIN, edgecolor='none', zorder=1))
 
     # ---- (a) normalized trajectories --------------------------------------
     _window(ax_a)
-    _ensemble(ax_a, t, Z, draw)
+    _ensemble(ax_a, tn, Z, draw)
     ax_a.axhline(1.0, color=INK2, lw=0.6, ls=(0, (4, 3)), zorder=4)
-    ax_a.set_ylabel('$z^* = \\bar z / \\bar z(t^*{=}1)$')
-    ax_a.set_title('a   Normalized mean-elevation trajectories')
+    ax_a.set_ylabel('$z^*$')
+    #ax_a.set_title('a   Normalized mean-elevation trajectories')
+    ax_a.set_title('A')
     band_handles = ([Line2D([], [], color=C_ENS, lw=1.3, label='median'),
                      Patch(facecolor=C_ENS, alpha=0.30, label='5\u201395%'),
                      Patch(facecolor=C_ENS, alpha=0.16, label='1\u201399%')]
@@ -727,25 +817,58 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
                     [Line2D([], [], color=C_ENS, lw=0.8, alpha=0.5,
                             label=f'{m:,} landscapes')])
     ax_a.legend(handles=band_handles
-                + [Patch(facecolor=C_WIN, label=f'evaluated, $t^*\\geq${t0:.2f}')],
+                + [Patch(facecolor=C_WIN,
+                         label=f'window, $t^*\\geq${t_w:.2f}')],
                 loc='lower right', handlelength=1.6, handletextpad=0.5)
 
     # ---- (b) range remaining ----------------------------------------------
     _window(ax_b)
     Rp = np.maximum(R[:, :-1], 1e-12)
-    _ensemble(ax_b, t[:-1], Rp, draw)
+    _ensemble(ax_b, tn[:-1], Rp, draw)
     for lv in guides:
-        ax_b.axhline(lv, color=INK2, lw=0.55, ls=(0, (2, 2)), zorder=3)
-        ax_b.text(1.005, lv, f'{100 * lv:g}%', fontsize=6.8, color=INK2,
+    	break
+    	ax_b.axhline(lv, color=INK2, lw=0.55, ls=(0, (2, 2)), zorder=3)
+    	ax_b.text(1.005, lv, f'{100 * lv:g}%', fontsize=6.8, color=INK2,
                   va='center')
     ax_b.set_yscale('log')
     ax_b.set_ylim(Y_FLOOR, 1.5)
-    ax_b.set_ylabel('$R(t^*)$   range of $z^*$ over $[t^*,\\,1]$')
-    ax_b.set_title('b   Elevation range remaining after $t^*$')
+    ax_b.set_ylabel('$R$')
+    #ax_b.set_title('b   Elevation range remaining after $t^*$')
+    ax_b.set_title('B')
+    ax_b.yaxis.tick_right()                    # ticks + tick labels to the right
+    ax_b.yaxis.set_label_position("right")     # the ylabel too
 
-    fig.suptitle(f'Steady-state verification  ·  {args.series}  ·  '
-                 f'n = {m:,} landscapes',
-                 fontsize=9, x=0.012, ha='left', y=1.0)
+    # ---- (b) inset: the approach to the final window ----------------------
+    # The outer axes carry the argument that R contracts by orders of
+    # magnitude over the run; at full scale the evaluated window is the
+    # rightmost few percent of the axis and too narrow to read. The inset
+    # resolves it without cropping the outer axes. The indicator rectangle
+    # can render awkwardly across a log y-axis; if it does, drop the
+    # indicate_inset_zoom call and the x tick labels still carry the range.
+    #sel = tn[:-1] >= INSET_T0
+    #if sel.sum() >= 2:
+    #    Ri = Rp[:, sel]
+    #    axins = ax_b.inset_axes([0.10, 0.12, 0.44, 0.40])
+    #    axins.set_yscale('log')
+    #    axins.add_patch(Rectangle((t_w, 0), 1.0 - t_w, 1,
+    #                              transform=axins.get_xaxis_transform(),
+    #                              facecolor=C_WIN, edgecolor='none', zorder=1))
+    #    _ensemble(axins, tn[:-1][sel], Ri, draw)
+    #    axins.axhline(args.delta, color=INK2, lw=0.55, ls=(0, (2, 2)),
+    #                  zorder=3)
+    #    axins.set_xlim(INSET_T0, 1.0)
+    #    axins.set_ylim(max(float(Ri.min()) / 1.6, Y_FLOOR),
+    #                   float(Ri.max()) * 1.6)
+    #    axins.grid(True, color=GRID, lw=0.3, zorder=0)
+    #    axins.set_axisbelow(True)
+    #    for sp in ('top', 'right'):
+    #        axins.spines[sp].set_visible(False)
+    #    axins.tick_params(labelsize=6.2, length=2.0, pad=1.5)
+    #    ax_b.indicate_inset_zoom(axins, ec=INK2, lw=0.5, alpha=0.6)
+
+    #fig.suptitle(f'Steady-state verification  ·  {args.series}  ·  '
+    #             f'n = {m:,} landscapes',
+    #             fontsize=9, x=0.012, ha='left', y=1.0)
     fig.tight_layout()
     return fig
 
@@ -835,9 +958,9 @@ def make_space_figure(res: pd.DataFrame, point_size: float = 11.0):
                marker='D', c=C_FAIL, ec='white', lw=0.4, zorder=5)
     ax.legend(handles=[
         Line2D([], [], marker='o', ls='none', mfc=C_ENS, mec='none', ms=4.4,
-               label=f'verified, retained  ({int(ok.sum()):,})'),
+               label=f'steady-state  ({int(ok.sum()):,})'),
         Line2D([], [], marker='D', ls='none', mfc=C_FAIL, mec='white', ms=4.6,
-               label=f'not verified, excluded  ({int((~ok).sum()):,})')],
+               label=f'non-steady-state  ({int((~ok).sum()):,})')],
         loc='lower left', handletextpad=0.5, frameon=True, framealpha=0.88,
         edgecolor='none', facecolor='white')
 
@@ -845,10 +968,10 @@ def make_space_figure(res: pd.DataFrame, point_size: float = 11.0):
     _log_ticks(ax, 'y', float(d['kh_ks'].min()), float(d['kh_ks'].max()))
 
     n_fail = int((~ok).sum())
-    fig.suptitle(f'Steady state across the parameter plane  ·  '
-                 f'n = {len(d):,}  ·  {n_fail:,} excluded '
-                 f'({100 * n_fail / len(d):.1f}%)',
-                 fontsize=9, x=0.012, ha='left', y=1.0)
+    #fig.suptitle(f'Steady state across the parameter plane  ·  '
+    #             f'n = {len(d):,}  ·  {n_fail:,} excluded '
+    #             f'({100 * n_fail / len(d):.1f}%)',
+    #             fontsize=9, x=0.012, ha='left', y=1.0)
     fig.tight_layout()
     return fig
 
@@ -880,7 +1003,7 @@ def derive_out_path(args, git_hash: str, ext: str) -> Path:
     """
     stem = args.out_stem or (
         f"steady-state-{args.series.replace('ts_', '').replace('_elevs', '')}"
-        f"-f{args.fit_window}-{args.reference}-{git_hash}"
+        f"-f{args.final_window}-{args.reference}-{git_hash}"
     )
     return Path(args.out_dir) / f'{stem}.{ext}'
 
@@ -897,14 +1020,14 @@ def print_summary(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
 
     Notes
     -----
-    Ensemble settling times are read from the pointwise maximum of G, so they
+    Ensemble settling times are read from the pointwise maximum of R, so they
     are statements about every landscape simultaneously rather than about a
     median or a quantile.
     """
     counts = res['status'].value_counts()
     ok = res[res['status'] == 'ok']
     print(f"\nSeries: {args.series} | reference: {args.reference} | "
-          f"fit window: {args.fit_window} | delta: {args.delta:g}")
+          f"final window: {args.final_window} | delta: {args.delta:g}")
     print(f"Landscapes: {len(res):,}  "
           + "  ".join(f"{k}={v:,}" for k, v in counts.items()))
     if not len(ok):
@@ -915,9 +1038,9 @@ def print_summary(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
           f"max {100 * ok['overshoot'].max():.2f}%  "
           f"at t* {ok['t_peak'].min():.2f}-{ok['t_peak'].max():.2f}")
 
-    q = ok['range_rel'].quantile([0.5, 0.95, 0.99, 1.0])
-    print(f"\nRange of z* over the final {args.fit_window} points "
-          f"(t* >= {ok['t_fit'].iloc[0]:.2f}):")
+    q = ok['R_w'].quantile([0.5, 0.95, 0.99, 1.0])
+    print(f"\nRange of z* over the final {args.final_window} points "
+          f"(t* >= {ok['t_w'].iloc[0]:.2f}):")
     for lab, v in q.items():
         print(f"  {lab:>5.2f}  {v:.3e}")
 
@@ -944,7 +1067,7 @@ def print_summary(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
             print("  max over verified landscapes crosses: "
                   + _cross(R[vmask].max(axis=0)))
 
-    print(f"\nPer-step change over the final {args.fit_window} points "
+    print(f"\nPer-step change over the final {args.final_window} points "
           f"(the conventional measure, normalized units):")
     print(f"  dz_max median {ok['dz_max'].median():.3e}  "
           f"p95 {ok['dz_max'].quantile(0.95):.3e}  "
@@ -983,8 +1106,8 @@ def print_summary(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
                   + "  ".join(f"{r:.1f}% ({c})"
                               for r, c in zip(rate.values, cnt.values)))
 
-    worst = ok.nlargest(min(10, len(ok)), 'range_rel')
-    cols = ['job_id', 'landscape_idx', 'range_rel', 'dz_max', 'mono',
+    worst = ok.nlargest(min(10, len(ok)), 'R_w')
+    cols = ['job_id', 'landscape_idx', 'R_w', 'dz_max', 'mono',
             'end_pos', 'verified']
     print("\nLargest remaining ranges:")
     print(worst[cols].to_string(
@@ -1011,18 +1134,21 @@ def main():
                    choices=['ts_mean_elevs', 'ts_max_elevs'],
                    help='Series to characterize. ts_max_elevs is the relief '
                         'proxy and the stricter test. Default: ts_mean_elevs.')
-    p.add_argument('--reference', default='final',
+    p.add_argument('--reference', default='window-mean',
                    choices=['final', 'window-mean'],
-                   help="Level the deviation is measured against. 'final' is "
-                        'z(t*=1), the snapshot feature extraction uses. '
-                        "Default: final.")
-    p.add_argument('--norm-window', type=int, default=None,
-                   help='Trailing points averaged when --reference '
-                        'window-mean. Defaults to --fit-window, so that the '
-                        'reference is the centre of the interval being '
-                        'tested; any other value references the window to a '
-                        'point partway inside it.')
-    p.add_argument('--fit-window', type=int, default=5,
+                   help="Level the range is measured relative to. "
+                        "'window-mean' is the mean over the final window, a "
+                        "property of the interval being tested; 'final' is "
+                        'z(t*=1), the snapshot feature extraction uses. The '
+                        'two scale every range by the same near-unity '
+                        "factor. Default: window-mean.")
+    p.add_argument('--ref-window', type=int, default=None,
+                   help='Trailing points averaged when --reference is '
+                        'window-mean. Defaults to --final-window, so the '
+                        'reference is the mean of the same interval whose '
+                        'range is tested; any other value draws the level '
+                        'from a different interval.')
+    p.add_argument('--final-window', type=int, default=5,
                    help='Trailing points forming the final window, over '
                         'which the range, dz_max and mono are evaluated. '
                         'Default: 5.')
@@ -1057,11 +1183,11 @@ def main():
                    help='Override the derived filename stem.')
     args = p.parse_args()
 
-    if args.norm_window is None:
-        args.norm_window = args.fit_window
-    if args.fit_window < 3:
-        sys.exit("ERROR: --fit-window must be at least 3 to give a "
-                 "meaningful tail window.")
+    if args.ref_window is None:
+        args.ref_window = args.final_window
+    if args.final_window < 3:
+        sys.exit("ERROR: --final-window must be at least 3 to give a "
+                 "meaningful final window.")
 
     df = load_params(args.params_dir, args.job_ids)
     if args.series not in df.columns:
@@ -1069,7 +1195,7 @@ def main():
                  f"got {list(df.columns)}.")
 
     res, curves = check_ensemble(df, args.series, args.reference,
-                                 args.norm_window, args.fit_window,
+                                 args.ref_window, args.final_window,
                                  args.delta)
 
     git_hash = _git_hash()
@@ -1082,14 +1208,14 @@ def main():
 
     if args.manifest:
         keep = res.loc[res['verified'],
-                       ['job_id', 'landscape_idx', 'ts_index', 'range_rel']]
+                       ['job_id', 'landscape_idx', 'ts_index', 'R_w']]
         keep_path = csv_path.with_name(csv_path.stem + '-retained.csv')
         keep.to_csv(keep_path, index=False)
         print(f"Wrote {keep_path}  ({len(keep):,} retained)")
 
         man = res.loc[~res['verified'],
                       ['job_id', 'landscape_idx', 'exclusion_reason',
-                       'range_rel', 'dz_max', 'mono']]
+                       'R_w', 'dz_max', 'mono']]
         man_path = csv_path.with_name(csv_path.stem + '-excluded.csv')
         man.to_csv(man_path, index=False)
         print(f"Wrote {man_path}  ({len(man):,} excluded)")
