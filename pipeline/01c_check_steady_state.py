@@ -173,7 +173,7 @@ Output
         or significance flag is written: the method uses differences of the
         recorded series only.
 
-    steady-state-{series}-f{n_w}-{reference}-{hash}-retained.csv
+    steady-state-{series}-f{n_w}-{reference}-retained-{hash}.csv
         The landscapes that passed, as (job_id, landscape_idx, ts_index) plus
         the measured range.  This is the selection list for downstream
         processing: those three columns are the refactored identifiers used
@@ -182,19 +182,16 @@ Output
         parameter files are renamed on load, so the manifest is always in the
         refactored convention regardless of the input.
 
-    steady-state-{series}-f{n_w}-{reference}-{hash}-excluded.csv
+    steady-state-{series}-f{n_w}-{reference}-excluded-{hash}.csv
         The landscapes that failed verification, with the reason, keyed the
         same way.  Both manifests are suppressed by ``--no-manifest``.
 
     steady-state-{series}-f{n_w}-{reference}-{hash}.png
-        Panel a, normalized trajectories; panel b, R(t*).  Both as quantile
-        envelopes, with the evaluated interval shaded in each.  Panel b
-        carries an inset over t* >= INSET_T0, which resolves the approach to
-        the final window without cropping the outer axes, with delta drawn
-        in it.
+        Panel A, normalized trajectories; panel B, R(t*).  Both as quantile
+        envelopes, with the evaluated interval shaded in each.
 
-    steady-state-{series}-f{n_w}-{reference}-{hash}-space.png
-        The verification outcome across the (U/Ks, Kh/Ks) plane, with the full
+    steady-state-{series}-f{n_w}-{reference}-space-{hash}.png
+	    The verification outcome across the (U/Ks, Kh/Ks) plane, with the full
         ensemble shown so that the retained coverage is visible.  Suppressed
         by ``--no-space-plot``.
 
@@ -229,6 +226,7 @@ import argparse
 import glob
 import os
 import sys
+import math
 from pathlib import Path
 
 import numpy as np
@@ -254,7 +252,8 @@ KEY_CANDIDATES = [('job_id', 'landscape_idx'), ('tmux-sess', 'df-ind')]
 # criterion itself.
 CARRY_COLS = ('u', 'kh', 'ks', 'ly', 'dx', 'T', 'hc', 'lc')
 
-# Containment levels reported for every landscape and drawn on the figure.
+# Containment levels reported for every landscape, as the Ts_ columns and in
+# the summary.
 LEVELS = (1e-2, 3e-3, 1e-3, 3e-4, 1e-4)
 
 # Leading output columns: identity, status, then the criterion in the order it
@@ -446,7 +445,7 @@ def running_range(zn: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     zn : np.ndarray
-        Series scaled to its final value, shape (n,).
+        Series scaled to its reference level, shape (n,).
 
     Returns
     -------
@@ -458,8 +457,8 @@ def running_range(zn: np.ndarray) -> np.ndarray:
     Non-increasing by construction: extending the window backwards can only
     widen it. A range has no zero point, so unlike a deviation it does not
     depend on which member of the window is taken as a reference; zn is
-    divided by the final value only to fix a scale, which cancels out of any
-    comparison between landscapes.
+    divided by the reference level only to fix a scale, which cancels out of
+    any comparison between landscapes.
     """
     fwd_max = np.maximum.accumulate(zn[::-1])[::-1]
     fwd_min = np.minimum.accumulate(zn[::-1])[::-1]
@@ -485,8 +484,8 @@ def settling_time(R: np.ndarray, level: float) -> float:
     -----
     R is non-increasing, so the first and last crossings coincide and no
     first-versus-last rule is needed. A deviation measured from a fixed
-    reference would need one, because these series overshoot their final
-    value and so pass through it on the way up.
+    reference would need one, because these series overshoot their reference
+    level and so pass through it on the way up.
     """
     n = len(R)
     inside = np.flatnonzero(R <= level)
@@ -701,9 +700,6 @@ C_WIN = '0.8'   # shading for the evaluated interval
 # than any level of interest and would stretch the axis over empty decades.
 Y_FLOOR = 1e-5
 
-# Left edge of the panel b inset, which resolves the approach to the final
-# window without cropping the outer axes.
-INSET_T0 = 0.8
 INK, INK2, GRID = '#0b0b0b', '#52514e', '#d9d8d3'
 
 
@@ -744,7 +740,7 @@ def _ensemble(ax, x, Y, draw_curves, color=C_ENS):
     ax.plot(x, np.median(Y, axis=0), color=color, lw=1.3, zorder=3)
 
 
-def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
+def make_figure(res: pd.DataFrame, curves: dict, args):
     """Build the two-panel steady-state figure.
 
     Parameters
@@ -754,8 +750,6 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     curves : dict
         Stacked ``zn`` and ``R`` arrays for the testable landscapes.
     args : argparse.Namespace
-    levels : sequence of float
-        Ranges drawn as guide lines in panel b.
 
     Returns
     -------
@@ -767,9 +761,9 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     evaluated interval with the same shaded rectangle, so the two can be read
     against each other without a separate explanation in either.
 
-    Panel b is purely distributional: quantile envelopes only, with guide
-    lines at the levels of interest. Counts and settling times are printed by
-    the summary and belong in the accompanying text rather than on the axes.
+    Panel B is purely distributional: quantile envelopes only. Counts and
+    settling times are printed by the summary and belong in the accompanying
+    text rather than on the axes.
 
     R reaches zero at the final point, where the interval contains one value,
     so that point is dropped from the log axis; the axis is floored at
@@ -785,8 +779,8 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     m, n = Z.shape
     tn = (np.arange(n) + 1) / n
     t_w = float(ok['t_w'].iloc[0])
-    draw = args.draw_curves if args.draw_curves is not None else (m < BAND_MIN_N)
-    guides = [lv for lv in levels if lv >= 3e-4]
+    draw = (args.draw_curves if args.draw_curves is not None
+            else (m < BAND_MIN_N))
 
     fig, (ax_a, ax_b) = plt.subplots(1, 2, figsize=(7.4, 3.3))
     for ax in (ax_a, ax_b):
@@ -806,13 +800,12 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     # ---- (a) normalized trajectories --------------------------------------
     _window(ax_a)
     _ensemble(ax_a, tn, Z, draw)
-    ax_a.axhline(1.0, color=INK2, lw=0.6, ls=(0, (4, 3)), zorder=4)
-    ax_a.set_ylabel('$z^*$')
-    #ax_a.set_title('a   Normalized mean-elevation trajectories')
-    ax_a.set_title('A')
+    ax_a.axhline(1.0, color=INK2, lw=1, ls=(0, (4, 3)), zorder=4)
+    ax_a.set_ylabel(r'$\bar{z}^*$  ',rotation=0)
+    ax_a.text(0.95, 0.95, 'A', horizontalalignment='right', verticalalignment='top', transform=ax_a.transAxes)
     band_handles = ([Line2D([], [], color=C_ENS, lw=1.3, label='median'),
-                     Patch(facecolor=C_ENS, alpha=0.30, label='5\u201395%'),
-                     Patch(facecolor=C_ENS, alpha=0.16, label='1\u201399%')]
+                     Patch(facecolor=C_ENS, alpha=0.30, label='5–95%'),
+                     Patch(facecolor=C_ENS, alpha=0.16, label='1–99%')]
                     if not draw else
                     [Line2D([], [], color=C_ENS, lw=0.8, alpha=0.5,
                             label=f'{m:,} landscapes')])
@@ -825,53 +818,25 @@ def make_figure(res: pd.DataFrame, curves: dict, args, levels=LEVELS):
     _window(ax_b)
     Rp = np.maximum(R[:, :-1], 1e-12)
     _ensemble(ax_b, tn[:-1], Rp, draw)
-    for lv in guides:
-    	break
-    	ax_b.axhline(lv, color=INK2, lw=0.55, ls=(0, (2, 2)), zorder=3)
-    	ax_b.text(1.005, lv, f'{100 * lv:g}%', fontsize=6.8, color=INK2,
-                  va='center')
     ax_b.set_yscale('log')
     ax_b.set_ylim(Y_FLOOR, 1.5)
-    ax_b.set_ylabel('$R$')
-    #ax_b.set_title('b   Elevation range remaining after $t^*$')
-    ax_b.set_title('B')
+    ax_b.set_ylabel('  $R$',rotation=0)
+    ax_b.text(0.95, 0.95, 'B', horizontalalignment='right', verticalalignment='top', transform=ax_b.transAxes)
     ax_b.yaxis.tick_right()                    # ticks + tick labels to the right
     ax_b.yaxis.set_label_position("right")     # the ylabel too
+    ax_b.axhline(0.001, color='r', lw=0.6, ls=(0, (4, 3)), zorder=4,label=r'$\delta=0.001$')
+    ax_b.legend()
+    
 
-    # ---- (b) inset: the approach to the final window ----------------------
-    # The outer axes carry the argument that R contracts by orders of
-    # magnitude over the run; at full scale the evaluated window is the
-    # rightmost few percent of the axis and too narrow to read. The inset
-    # resolves it without cropping the outer axes. The indicator rectangle
-    # can render awkwardly across a log y-axis; if it does, drop the
-    # indicate_inset_zoom call and the x tick labels still carry the range.
-    #sel = tn[:-1] >= INSET_T0
-    #if sel.sum() >= 2:
-    #    Ri = Rp[:, sel]
-    #    axins = ax_b.inset_axes([0.10, 0.12, 0.44, 0.40])
-    #    axins.set_yscale('log')
-    #    axins.add_patch(Rectangle((t_w, 0), 1.0 - t_w, 1,
-    #                              transform=axins.get_xaxis_transform(),
-    #                              facecolor=C_WIN, edgecolor='none', zorder=1))
-    #    _ensemble(axins, tn[:-1][sel], Ri, draw)
-    #    axins.axhline(args.delta, color=INK2, lw=0.55, ls=(0, (2, 2)),
-    #                  zorder=3)
-    #    axins.set_xlim(INSET_T0, 1.0)
-    #    axins.set_ylim(max(float(Ri.min()) / 1.6, Y_FLOOR),
-    #                   float(Ri.max()) * 1.6)
-    #    axins.grid(True, color=GRID, lw=0.3, zorder=0)
-    #    axins.set_axisbelow(True)
-    #    for sp in ('top', 'right'):
-    #        axins.spines[sp].set_visible(False)
-    #    axins.tick_params(labelsize=6.2, length=2.0, pad=1.5)
-    #    ax_b.indicate_inset_zoom(axins, ec=INK2, lw=0.5, alpha=0.6)
-
-    #fig.suptitle(f'Steady-state verification  ·  {args.series}  ·  '
-    #             f'n = {m:,} landscapes',
-    #             fontsize=9, x=0.012, ha='left', y=1.0)
     fig.tight_layout()
     return fig
 
+def _sci(v, _):
+    """Format a positive tick value as mathtext scientific notation."""
+    e = int(math.floor(math.log10(v) + 1e-9))
+    m = v / 10 ** e
+    return (f'$10^{{{e}}}$' if abs(m - 1) < 1e-9
+            else f'${m:g}{{\\times}}10^{{{e}}}$')
 
 def _log_ticks(ax, which: str, lo: float, hi: float):
     """Put readable major ticks on a log axis spanning less than two decades.
@@ -886,19 +851,17 @@ def _log_ticks(ax, which: str, lo: float, hi: float):
     Notes
     -----
     Matplotlib's default log minor labels collide when the range is short, as
-    U/Ks is here. Ticks are placed at the 1-2-3-5 points of each decade inside
+    U/Ks is here. Ticks are placed at the 1-2-5 points of each decade inside
     the range and minor labels are suppressed.
     """
-    import math
     import matplotlib as mpl
     decades = range(math.floor(math.log10(lo)), math.ceil(math.log10(hi)) + 1)
-    ticks = [mm * 10 ** k for k in decades for mm in (1, 2, 3, 5)
+    ticks = [mm * 10 ** k for k in decades for mm in (1, 2, 5)
              if lo * 0.95 <= mm * 10 ** k <= hi * 1.05]
     axis = ax.xaxis if which == 'x' else ax.yaxis
     if len(ticks) >= 3:
         axis.set_major_locator(mpl.ticker.FixedLocator(ticks))
-        axis.set_major_formatter(mpl.ticker.FuncFormatter(
-            lambda v, _: f'{v:,.0f}' if v >= 1 else f'{v:g}'))
+        axis.set_major_formatter(mpl.ticker.FuncFormatter(_sci))
     axis.set_minor_formatter(mpl.ticker.NullFormatter())
 
 
@@ -955,11 +918,11 @@ def make_space_figure(res: pd.DataFrame, point_size: float = 11.0):
     ax.scatter(d.loc[ok, 'u_ks'], d.loc[ok, 'kh_ks'], s=point_size,
                c=C_ENS, lw=0, alpha=0.45, zorder=2, rasterized=True)
     ax.scatter(d.loc[~ok, 'u_ks'], d.loc[~ok, 'kh_ks'], s=point_size * 2.2,
-               marker='D', c=C_FAIL, ec='white', lw=0.4, zorder=5)
+               marker='D', c='none', ec=C_FAIL, lw=0.4, zorder=5)
     ax.legend(handles=[
         Line2D([], [], marker='o', ls='none', mfc=C_ENS, mec='none', ms=4.4,
                label=f'steady-state  ({int(ok.sum()):,})'),
-        Line2D([], [], marker='D', ls='none', mfc=C_FAIL, mec='white', ms=4.6,
+        Line2D([], [], marker='D', ls='none', mfc='white', mec=C_FAIL, ms=4.6,
                label=f'non-steady-state  ({int((~ok).sum()):,})')],
         loc='lower left', handletextpad=0.5, frameon=True, framealpha=0.88,
         edgecolor='none', facecolor='white')
@@ -967,11 +930,7 @@ def make_space_figure(res: pd.DataFrame, point_size: float = 11.0):
     _log_ticks(ax, 'x', float(d['u_ks'].min()), float(d['u_ks'].max()))
     _log_ticks(ax, 'y', float(d['kh_ks'].min()), float(d['kh_ks'].max()))
 
-    n_fail = int((~ok).sum())
-    #fig.suptitle(f'Steady state across the parameter plane  ·  '
-    #             f'n = {len(d):,}  ·  {n_fail:,} excluded '
-    #             f'({100 * n_fail / len(d):.1f}%)',
-    #             fontsize=9, x=0.012, ha='left', y=1.0)
+
     fig.tight_layout()
     return fig
 
@@ -980,7 +939,7 @@ def make_space_figure(res: pd.DataFrame, point_size: float = 11.0):
 # REPORTING
 # =============================================================================
 
-def derive_out_path(args, git_hash: str, ext: str) -> Path:
+def derive_out_path(args, git_hash: str, ext: str, role: str = '') -> Path:
     """Build an output path from the CLI arguments.
 
     Parameters
@@ -990,6 +949,9 @@ def derive_out_path(args, git_hash: str, ext: str) -> Path:
         Short commit hash, or 'unknown'.
     ext : str
         File extension without the dot.
+    role : str, optional
+        Role marker for a secondary output, e.g. ``'-retained'``. Empty for
+        the main CSV and the main figure.
 
     Returns
     -------
@@ -997,14 +959,24 @@ def derive_out_path(args, git_hash: str, ext: str) -> Path:
 
     Notes
     -----
-    ``--out-stem`` overrides the derived stem. Otherwise the name encodes the
-    series, window and reference so that runs under different settings coexist
-    in one directory rather than overwriting one another.
+    ``--out-stem`` overrides the derived stem, and then carries the role
+    marker but no hash, on the view that a caller naming files explicitly is
+    not asking for one. Otherwise the name encodes the series, window and
+    reference so that runs under different settings coexist in one directory
+    rather than overwriting one another.
+
+    The hash is last, immediately before the extension, so that every output
+    of one run sorts together under its role and the commit stays adjacent to
+    the suffix it labels.
     """
-    stem = args.out_stem or (
-        f"steady-state-{args.series.replace('ts_', '').replace('_elevs', '')}"
-        f"-f{args.final_window}-{args.reference}-{git_hash}"
-    )
+    if args.out_stem:
+        stem = f'{args.out_stem}{role}'
+    else:
+        stem = (
+            'steady-state-'
+            f"{args.series.replace('ts_', '').replace('_elevs', '')}"
+            f'-f{args.final_window}-{args.reference}{role}-{git_hash}'
+        )
     return Path(args.out_dir) / f'{stem}.{ext}'
 
 
@@ -1209,14 +1181,14 @@ def main():
     if args.manifest:
         keep = res.loc[res['verified'],
                        ['job_id', 'landscape_idx', 'ts_index', 'R_w']]
-        keep_path = csv_path.with_name(csv_path.stem + '-retained.csv')
+        keep_path = derive_out_path(args, git_hash, 'csv', '-retained')
         keep.to_csv(keep_path, index=False)
         print(f"Wrote {keep_path}  ({len(keep):,} retained)")
 
         man = res.loc[~res['verified'],
                       ['job_id', 'landscape_idx', 'exclusion_reason',
                        'R_w', 'dz_max', 'mono']]
-        man_path = csv_path.with_name(csv_path.stem + '-excluded.csv')
+        man_path = derive_out_path(args, git_hash, 'csv', '-excluded')
         man.to_csv(man_path, index=False)
         print(f"Wrote {man_path}  ({len(man):,} excluded)")
 
@@ -1235,8 +1207,7 @@ def main():
             print("Parameter columns absent; space figure skipped.")
         else:
             for ext in args.formats:
-                base = derive_out_path(args, git_hash, ext)
-                sp = base.with_name(base.stem + '-space' + base.suffix)
+                sp = derive_out_path(args, git_hash, ext, '-space')
                 fig.savefig(sp, bbox_inches='tight', facecolor='white')
                 print(f"Wrote {sp}")
 
