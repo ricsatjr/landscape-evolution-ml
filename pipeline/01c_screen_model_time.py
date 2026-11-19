@@ -9,7 +9,7 @@ Screening experiment that fixes the model time multiplier ``k`` used by
 This is step one of the two-step steady-state determination.  The model time
 allotted to a landscape must be fixed before that landscape exists, whereas
 whether the allotted time sufficed can only be known from the record of the
-completed run.  This script performs the screening; ``01c_check_steady_state``
+completed run.  This script performs the screening; ``01d_check_steady_state``
 performs the per-landscape verification afterwards.
 
 Although numbered after it, this script runs BEFORE ``01_generate_landscapes``:
@@ -91,14 +91,14 @@ the same code path in this process and produces identical output.
 
 Usage
 -----
-    python pipeline/01d_screen_model_time.py --out-dir data/screening
+    python pipeline/01c_screen_model_time.py --out-dir data/landscapes/model-time
 
     python pipeline/01d_screen_model_time.py --k-values 5 10 15 20 25 30 \
-        --n-landscapes 30 --out-dir data/screening
+        --n-landscapes 30 --out-dir data/landscapes/model-time
 
     # run the whole sweep rather than stopping at the first k that passes
     python pipeline/01d_screen_model_time.py --no-early-stop \
-        --out-dir data/screening
+        --out-dir data/landscapes/model-time
 
 Output
 ------
@@ -256,7 +256,7 @@ def _worker_modules():
     Returns
     -------
     (module, module)
-        ``01_generate_landscapes`` and ``01c_check_steady_state``.
+        ``01_generate_landscapes`` and ``01d_check_steady_state``.
 
     Notes
     -----
@@ -265,7 +265,7 @@ def _worker_modules():
     """
     if not _WORKER_MODS:
         _WORKER_MODS['gen'] = _load_sibling('01_generate_landscapes')
-        _WORKER_MODS['chk'] = _load_sibling('01c_check_steady_state')
+        _WORKER_MODS['chk'] = _load_sibling('01d_check_steady_state')
     return _WORKER_MODS['gen'], _WORKER_MODS['chk']
 
 
@@ -687,7 +687,7 @@ def make_figure(curves: dict, args, k_chosen=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
 
-    chk = _load_sibling('01c_check_steady_state')
+    chk = _load_sibling('01d_check_steady_state')
     chk._style()
 
     ks_sorted = sorted(curves)
@@ -741,7 +741,7 @@ def derive_out_path(args, git_hash: str, ext: str) -> Path:
     Notes
     -----
     The hash is last, immediately before the extension, matching the
-    convention in ``01c_check_steady_state``.
+    convention in ``01d_check_steady_state``.
     """
     stem = args.out_stem or (f'screen-model-time-n{args.n_landscapes}'
                              f'-ts{args.num_ts}-{git_hash}')
