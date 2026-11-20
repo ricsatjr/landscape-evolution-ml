@@ -106,10 +106,17 @@ Output
         One row per (k, landscape): the LE parameters, dt, the diffusion
         stability ratio, R_w, and whether that curve passed.
 
+    screen-model-time-n{n}-ts{num_ts}-{hash}.npz
+        The normalized mean-elevation series themselves, one
+        (n_landscapes, num_ts) array per multiplier, keyed ``k5``, ``k10``
+        and so on in the order of ``landscape_idx``.  Written before the
+        figure, so a sweep survives a plotting failure and the series can be
+        re-examined or redrawn without re-running.
+
     screen-model-time-n{n}-ts{num_ts}-{hash}.png
-        One panel per k, each showing all normalized mean-elevation curves
-        against normalized time.  This is the figure the visual criterion is
-        applied to.
+        One panel per k in a grid of ``--fig-cols`` columns, each showing all
+        normalized mean-elevation curves against normalized time.  This is
+        the figure the visual criterion is applied to.
 
     The filenames encode the sample size, the step count and the git hash so
     runs under different settings coexist in one directory.
@@ -245,6 +252,9 @@ PROBE_INTERVAL_S = 5.0
 
 # Fraction of the cores that must be idle before the limiter adds a worker.
 CPU_HEADROOM = 0.15
+
+# Panel columns in the figure. Rows follow from the number of multipliers.
+FIG_COLS = 3
 
 
 _WORKER_MODS = {}
@@ -683,6 +693,13 @@ def make_figure(curves: dict, args, k_chosen=None):
     Every curve is drawn individually rather than as an envelope.  The sample
     is small enough that the curves are legible, and the criterion is whether
     each one has flattened, which an envelope would conceal.
+
+    Panels are laid out in a grid of ``--fig-cols`` columns, so six
+    multipliers fall into two rows of three rather than one row of six,
+    which fits a page without shrinking each panel to a sliver.  Axes beyond
+    the number of multipliers are removed rather than left blank.  Axis
+    labels are drawn only on the outer edges, since the panels share both
+    scales.
     """
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
@@ -692,11 +709,15 @@ def make_figure(curves: dict, args, k_chosen=None):
 
     ks_sorted = sorted(curves)
     n = len(ks_sorted)
-    fig, axes = plt.subplots(1, n, figsize=(1.9 * n + 0.6, 2.9),
-                             sharey=True, squeeze=False)
+    ncols = max(1, min(args.fig_cols, n))
+    nrows = -(-n // ncols)                # ceiling division
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(1.9 * ncols + 0.6, 2.6 * nrows + 0.3),
+                             sharex=True, sharey=True, squeeze=False)
+    flat = axes.ravel()
 
     t_w = 1.0 - args.final_window / args.num_ts
-    for ax, k in zip(axes[0], ks_sorted):
+    for ax, k in zip(flat, ks_sorted):
         Z = curves[k]
         tn = (np.arange(Z.shape[1]) + 1) / Z.shape[1]
         ax.add_patch(Rectangle((t_w, 0), 1 - t_w, 1,
@@ -710,11 +731,22 @@ def make_figure(curves: dict, args, k_chosen=None):
         for sp in ('top', 'right'):
             ax.spines[sp].set_visible(False)
         ax.set_xlim(0, 1)
-        ax.set_xlabel('$t^*$')
         mark = '  (chosen)' if k_chosen is not None and k == k_chosen else ''
         ax.set_title(f'$k$ = {k:g}{mark}')
 
-    axes[0][0].set_ylabel('$\\bar z\\,/\\,\\bar z(t^*{=}1)$')
+    for ax in flat[n:]:                   # grid wider than the sweep
+        ax.remove()
+
+    # Outer edges only: the panels share both scales, so repeating the
+    # labels inside the grid adds ink without adding information.
+    for ax in flat[:n][-ncols:]:
+        ax.set_xlabel('$t^*$')
+        # sharex labels only the grid's last row; a panel left exposed by a
+        # removed neighbour needs its tick labels restored.
+        ax.tick_params(labelbottom=True)
+    for ax in axes[:, 0]:
+        if ax in set(flat[:n]):
+            ax.set_ylabel('$\\bar z\\,/\\,\\bar z(t^*{=}1)$')
     fig.tight_layout()
     return fig
 
@@ -842,6 +874,10 @@ def main():
     p.add_argument('--no-early-stop', action='store_true',
                    help='Sweep every requested k instead of stopping at the '
                         'first that passes.')
+    p.add_argument('--fig-cols', type=int, default=FIG_COLS,
+                   help='Panel columns in the figure; rows follow from the '
+                        'number of multipliers. Default: '
+                        f'{FIG_COLS}.')
     p.add_argument('--no-plot', dest='plot', action='store_false',
                    help='Write the CSV only.')
     p.add_argument('--formats', nargs='+', default=['png'],
@@ -888,8 +924,17 @@ def main():
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     res.to_csv(csv_path, index=False)
 
+    # Written before the figure: a sweep is expensive, and the curves are
+    # the only part that cannot be recovered from the CSV. With these on
+    # disk the series can be re-inspected, and the figure redrawn, without
+    # evolving a single landscape again.
+    npz_path = derive_out_path(args, git_hash, 'npz')
+    np.savez_compressed(npz_path,
+                        **{f'k{k:g}': c for k, c in curves.items()})
+
     print_summary(res, args, k_chosen)
     print(f"\nWrote {csv_path}")
+    print(f"Wrote {npz_path}")
 
     if args.plot:
         fig = make_figure(curves, args, k_chosen)
