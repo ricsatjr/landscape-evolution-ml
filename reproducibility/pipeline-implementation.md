@@ -11,7 +11,22 @@ cd <path to repository>
 
 # generating landscapes
 
+
+## initial screening for model time (with job parallelization)
+`01c_screen_model_time.py` is done to estimate the appropriate k that would ensure steady state for most of the landscapes to be generated. 
+
+`python pipeline/01c_screen_model_time.py --k-values 5 10 15 20 25 30 --n-landscapes 30 --out-dir data/landscapes/model-time --jobs 6 --mem-reserve-gb 3`
+
+This sweep fixes the model time multiplier. The value adopted for this study is `k = 25`, set as `T_TC` in `01_generate_landscapes.py`.
+
+The sweep also writes the normalized elevation series to a `.npz` beside the CSV, which is what `--from-npz` reads; redrawing writes `…-<data hash>-fig-<code hash>.png`, recording both the commit that produced the data and the commit that drew the figure:
+
+`python pipeline/01c_screen_model_time.py   --from-npz data/landscapes/model-time/screen-model-time-n30-ts100-<data hash>.npz   --fig-cols 3 --fig-size 7 5`
+
+
+
 ## landscape generation for the main experiment
+
 `01_generate_landscapes.py` generates 10,000 candidate parameter sets, applies the constraints, and takes the first 10 valid ones to generate 10 time series of elevation grids, with each time series represented by 20 snapshots of the evolving elevation grid. The last grid in each timeseries (*-99.npy) are the ones used in the succeeding analyses. 
 
 <job-id> provides the random seed for reproducibility. The list of all job-id's used to produce the steady state landscapes for this study are found in `reproducibility/landscape-job-ids.csv`. 
@@ -20,12 +35,10 @@ LE parameters are saved as pickle files; elevation grids are saved as numpy file
 
 `python pipeline/01_generate_landscapes.py --job-id <job-id> --n-landscapes 10 --output-dir data/landscapes/`
 
-## initial screening for model time
-`python pipeline/01c_screen_model_time.py --k-values 5 10 15 20 25 30 --n-landscapes 30 --out-dir data/landscapes/model-time --jobs 6 --mem-reserve-gb 3`
 
+## objective steady-state check for landscapes
+`01d_check_steady_state.py` is used to check if the generated landscapes are in steady state based on a given set of criteria
 
-## steady-state check for landscapes
-`01d_check_steady_state.py` screens which landscapes are in steady state
 `python pipeline/01d_check_steady_state.py --params-dir data/landscapes   --out-dir data/landscapes/steady-state --final-window 5 --no-draw-curves`
 
 

@@ -118,6 +118,12 @@ Output
         normalized mean-elevation curves against normalized time.  This is
         the figure the visual criterion is applied to.
 
+    screen-model-time-n{n}-ts{num_ts}-{hash}-fig-{hash}.png
+        The same figure redrawn from a saved sweep by ``--from-npz``.  The
+        first hash is the commit that produced the data, the second the
+        commit that drew it; they differ once the plotting code moves on
+        from the sweep.
+
     The filenames encode the sample size, the step count and the git hash so
     runs under different settings coexist in one directory.
 
@@ -255,6 +261,9 @@ CPU_HEADROOM = 0.15
 
 # Panel columns in the figure. Rows follow from the number of multipliers.
 FIG_COLS = 3
+
+# Default output directory, also used to detect whether --out-dir was given.
+DEFAULT_OUT_DIR = 'data/landscapes/model-time'
 
 
 _WORKER_MODS = {}
@@ -670,10 +679,76 @@ def run_sweep(sets: pd.DataFrame, args, limiter=None) -> tuple:
 
 
 # =============================================================================
+# CURVE STORAGE
+# =============================================================================
+
+def save_curves(path: Path, curves: dict, final_window: int, k_chosen):
+    """Write the normalized series, with the little needed to redraw them.
+
+    Parameters
+    ----------
+    path : Path
+    curves : dict
+        ``{k: (n_landscapes, num_ts) array}``.
+    final_window : int
+        Stored for the figure only. The series themselves do not depend on
+        it: under ``reference='final'`` the scale is the last value of each
+        series, so the window affects R_w and the verdict in the CSV but not
+        the curves.
+    k_chosen : float or None
+
+    Notes
+    -----
+    ``num_ts`` and the sample size are the array dimensions, and the
+    multipliers are the keys, so none of them is stored separately. What
+    cannot be recovered from the arrays is the window the criterion was
+    evaluated over and which multiplier passed, and those are what make a
+    redrawn figure agree with the CSV beside it.
+    """
+    meta = {'final_window': np.array(final_window)}
+    if k_chosen is not None:
+        meta['k_chosen'] = np.array(float(k_chosen))
+    np.savez_compressed(path, **meta,
+                        **{f'k{k:g}': c for k, c in curves.items()})
+
+
+def load_curves(path) -> tuple:
+    """Read a saved sweep back for redrawing.
+
+    Parameters
+    ----------
+    path : str or Path
+        A ``.npz`` written by ``save_curves``.
+
+    Returns
+    -------
+    curves : dict
+        ``{k: (n_landscapes, num_ts) array}``.
+    final_window : int or None
+        None for a file written before this was recorded.
+    k_chosen : float or None
+
+    Notes
+    -----
+    Curve keys are ``k`` followed by a digit, which distinguishes them from
+    the metadata entries.
+    """
+    with np.load(path) as d:
+        names = list(d.files)
+        curves = {float(k[1:]): d[k] for k in names
+                  if k.startswith('k') and k[1:2].isdigit()}
+        fw = int(d['final_window']) if 'final_window' in names else None
+        kc = float(d['k_chosen']) if 'k_chosen' in names else None
+    if not curves:
+        sys.exit(f"ERROR: no curve arrays found in {path}.")
+    return curves, fw, kc
+
+
+# =============================================================================
 # FIGURE
 # =============================================================================
 
-def make_figure(curves: dict, args, k_chosen=None):
+def make_figure(curves: dict, args, k_chosen=None, final_window=None):
     """Plot the normalized curves, one panel per multiplier.
 
     Parameters
@@ -683,6 +758,11 @@ def make_figure(curves: dict, args, k_chosen=None):
     args : argparse.Namespace
     k_chosen : float or None
         Multiplier that passed, marked in its panel title.
+    final_window : int or None
+        Trailing points the criterion was evaluated over, shaded in each
+        panel. None draws no shading, which is the honest result when the
+        window is not known: the band asserts which interval was tested, so
+        a guessed one could contradict the CSV beside it.
 
     Returns
     -------
@@ -700,6 +780,12 @@ def make_figure(curves: dict, args, k_chosen=None):
     the number of multipliers are removed rather than left blank.  Axis
     labels are drawn only on the outer edges, since the panels share both
     scales.
+
+    ``num_ts`` is taken from the arrays rather than from ``args``, so the
+    figure can be drawn from a saved sweep without being told its length.
+
+    The y label and the in-axes panel label follow the checker's figure, so
+    the two steps' outputs read as one pair.
     """
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
@@ -709,21 +795,24 @@ def make_figure(curves: dict, args, k_chosen=None):
 
     ks_sorted = sorted(curves)
     n = len(ks_sorted)
+    num_ts = curves[ks_sorted[0]].shape[1]
     ncols = max(1, min(args.fig_cols, n))
     nrows = -(-n // ncols)                # ceiling division
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(1.9 * ncols + 0.6, 2.6 * nrows + 0.3),
+    figsize = (tuple(args.fig_size) if args.fig_size else
+               (1.9 * ncols + 0.6, 2.6 * nrows + 0.3))
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize,
                              sharex=True, sharey=True, squeeze=False)
     flat = axes.ravel()
 
-    t_w = 1.0 - args.final_window / args.num_ts
+    t_w = None if final_window is None else 1.0 - final_window / num_ts
     for ax, k in zip(flat, ks_sorted):
         Z = curves[k]
         tn = (np.arange(Z.shape[1]) + 1) / Z.shape[1]
-        ax.add_patch(Rectangle((t_w, 0), 1 - t_w, 1,
-                               transform=ax.get_xaxis_transform(),
-                               facecolor=chk.C_WIN, edgecolor='none',
-                               zorder=1))
+        if t_w is not None:
+            ax.add_patch(Rectangle((t_w, 0), 1 - t_w, 1,
+                                   transform=ax.get_xaxis_transform(),
+                                   facecolor=chk.C_WIN, edgecolor='none',
+                                   zorder=1))
         ax.plot(tn, Z.T, color=chk.C_ENS, lw=0.7, alpha=0.55, zorder=2)
         ax.axhline(1.0, color=chk.INK2, lw=0.6, ls=(0, (4, 3)), zorder=3)
         ax.grid(True, color=chk.GRID, lw=0.4, zorder=0)
@@ -732,7 +821,13 @@ def make_figure(curves: dict, args, k_chosen=None):
             ax.spines[sp].set_visible(False)
         ax.set_xlim(0, 1)
         mark = '  (chosen)' if k_chosen is not None and k == k_chosen else ''
-        ax.set_title(f'$k$ = {k:g}{mark}')
+        # Inside the axes rather than as a title, so the label costs no
+        # vertical space between rows. The lower right is empty in every
+        # panel whatever k is, since the curves rise from low values and all
+        # end at 1, so no background box is needed. Held at x = 0.94 to stay
+        # clear of the shaded window at the right edge.
+        ax.text(0.94, 0.06, f'$k$ = {k:g}{mark}', transform=ax.transAxes,
+                ha='right', va='bottom', zorder=5)
 
     for ax in flat[n:]:                   # grid wider than the sweep
         ax.remove()
@@ -746,7 +841,7 @@ def make_figure(curves: dict, args, k_chosen=None):
         ax.tick_params(labelbottom=True)
     for ax in axes[:, 0]:
         if ax in set(flat[:n]):
-            ax.set_ylabel('$\\bar z\\,/\\,\\bar z(t^*{=}1)$')
+            ax.set_ylabel(r'$\bar{z}^*$  ', rotation=0)
     fig.tight_layout()
     return fig
 
@@ -829,6 +924,62 @@ def print_summary(res: pd.DataFrame, args, k_chosen):
 # MAIN
 # =============================================================================
 
+def render_only(args):
+    """Redraw the figure from a saved sweep, evolving nothing.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        ``from_npz`` names the file; the figure options are taken from the
+        command line and everything else from the file.
+
+    Notes
+    -----
+    The output name carries both provenances: the source file's stem, whose
+    trailing hash is the commit that produced the data, followed by ``-fig-``
+    and the commit drawing it now. A figure is then traceable to the sweep it
+    came from and to the plotting code that rendered it, which a single hash
+    cannot express once the two can differ. The two coincide when nothing has
+    been committed since the sweep, and the name repeats the hash rather than
+    collapsing it, so the pattern stays predictable. ``--out-stem`` replaces
+    the whole name and adds no hash.
+
+    A ``--final-window`` given here overrides the stored value and is
+    reported, since the shaded band is a claim about which interval the
+    criterion used and a redraw can otherwise disagree with the CSV.
+    """
+    src = Path(args.from_npz)
+    if not src.exists():
+        sys.exit(f"ERROR: {src} not found.")
+
+    curves, fw_stored, k_chosen = load_curves(src)
+    sample = curves[sorted(curves)[0]]
+
+    fw = fw_stored
+    if args.final_window is not None and args.final_window != fw_stored:
+        if fw_stored is not None:
+            print(f"  Shading the final {args.final_window} points as asked; "
+                  f"the sweep used {fw_stored}.")
+        fw = args.final_window
+    elif fw_stored is None:
+        print("  No final window recorded in the file; drawing no shading.")
+
+    if args.out_dir == DEFAULT_OUT_DIR:
+        args.out_dir = str(src.parent)
+    if args.out_stem is None:
+        args.out_stem = f'{src.stem}-fig-{_git_hash()}'
+
+    print(f"Redrawing from {src}: {len(curves)} multipliers, "
+          f"{sample.shape[0]} landscapes, {sample.shape[1]} steps")
+
+    fig = make_figure(curves, args, k_chosen, fw)
+    for ext in args.formats:
+        out = derive_out_path(args, '', ext)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, bbox_inches='tight', facecolor='white')
+        print(f"Wrote {out}")
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -851,9 +1002,11 @@ def main():
                    help='Time steps per run. Default: NUM_TS from '
                         '01_generate_landscapes, so the screening series has '
                         'the same length as the production series.')
-    p.add_argument('--final-window', type=int, default=FINAL_WINDOW,
-                   help='Trailing points over which R_w is measured. Match '
-                        f'--final-window in 01c. Default: {FINAL_WINDOW}.')
+    p.add_argument('--final-window', type=int, default=None,
+                   help='Trailing points over which R_w is measured, and the '
+                        'interval shaded in the figure. Match the checker. '
+                        f'Default: {FINAL_WINDOW}. With --from-npz it is '
+                        'read from the file, and this overrides it.')
     p.add_argument('--delta', type=float, default=1e-3,
                    help='Threshold for the support criterion, R_w < delta. '
                         'Default: 1e-3.')
@@ -874,6 +1027,15 @@ def main():
     p.add_argument('--no-early-stop', action='store_true',
                    help='Sweep every requested k instead of stopping at the '
                         'first that passes.')
+    p.add_argument('--from-npz', default=None,
+                   help='Redraw the figure from a saved sweep and exit, '
+                        'running no landscapes. Sample size, step count and '
+                        'the multipliers come from the file; the figure '
+                        'options below still apply.')
+    p.add_argument('--fig-size', type=float, nargs=2, default=None,
+                   metavar=('W', 'H'),
+                   help='Figure width and height in inches. Default: scaled '
+                        'from the panel grid.')
     p.add_argument('--fig-cols', type=int, default=FIG_COLS,
                    help='Panel columns in the figure; rows follow from the '
                         'number of multipliers. Default: '
@@ -882,13 +1044,22 @@ def main():
                    help='Write the CSV only.')
     p.add_argument('--formats', nargs='+', default=['png'],
                    help='Figure formats to write. Default: png.')
-    p.add_argument('--out-dir', default='data/screening',
-                   help='Directory for output files. Default: data/screening.')
+    p.add_argument('--out-dir', default=DEFAULT_OUT_DIR,
+                   help='Directory for output files. With --from-npz and no '
+                        'value given, the figure is written beside the '
+                        f'source file. Default: {DEFAULT_OUT_DIR}.')
     p.add_argument('--out-stem', default=None,
                    help='Override the derived filename stem.')
     args = p.parse_args()
 
     args.k_values = sorted(args.k_values)
+
+    if args.from_npz:
+        render_only(args)
+        return
+
+    if args.final_window is None:
+        args.final_window = FINAL_WINDOW
     if args.final_window < 3:
         sys.exit('ERROR: --final-window must be at least 3.')
 
@@ -929,15 +1100,14 @@ def main():
     # disk the series can be re-inspected, and the figure redrawn, without
     # evolving a single landscape again.
     npz_path = derive_out_path(args, git_hash, 'npz')
-    np.savez_compressed(npz_path,
-                        **{f'k{k:g}': c for k, c in curves.items()})
+    save_curves(npz_path, curves, args.final_window, k_chosen)
 
     print_summary(res, args, k_chosen)
     print(f"\nWrote {csv_path}")
     print(f"Wrote {npz_path}")
 
     if args.plot:
-        fig = make_figure(curves, args, k_chosen)
+        fig = make_figure(curves, args, k_chosen, args.final_window)
         for ext in args.formats:
             fig_path = derive_out_path(args, git_hash, ext)
             fig.savefig(fig_path, bbox_inches='tight', facecolor='white')
