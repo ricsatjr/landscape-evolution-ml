@@ -96,7 +96,7 @@ A dictionary of model outputs is saved and exported as a pickle file.
 
 Compare features derived from n10 rasnets with those from n01 rasnets; specifically how the distribution of each feature in n01 varies in relation to the distribution of the corresponding feature in n10.  
 
-`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --out-csv data/features/compare-paired-features.csv --out-plot combined data/features/compare-paired-features.png`
+`python pipeline/03b_compare_features.py --n10-features-dir data/features/n10 --n01-features-dir data/features/n01 --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --out-csv data/features/compare-paired-features.csv --out-plot data/features/compare-paired-features.png`
 
 
 
@@ -104,18 +104,18 @@ Compare features derived from n10 rasnets with those from n01 rasnets; specifica
 # feature importance
 
 explore feature clusters for n10:
-`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-ss-2e0a16b.pkl --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection random`
+`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/<name of pickle file containing model results> --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection random`
 
-`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-ss-2e0a16b.pkl --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max`
+`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/<name of pickle file containing model results - full> --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max`
 
 
 train n10 models on domain-defined feature cluster representatives:
-`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/nested-cv-results-full-u_ks-kh_ks-ss-2e0a16b.pkl --reduced-models-pkl data/models/n10/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-2e0a16b.pkl --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max`
+`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n10/ --models-pkl data/models/n10/ratio/<name of pickle file containing model results - full> --reduced-models-pkl data/models/n10/ratio/reduced/<name of pickle file containing model results - reduced> --output-dir data/models/n10/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max`
 
 train n01 models on domain-defined feature cluster representatives of the n10 models:
-`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n01/ --models-pkl data/models/n01/ratio/nested-cv-results-full-u_ks-kh_ks-ss-b2384de.pkl --output-dir data/models/n01/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max --allow-cluster-collisions`
+`python pipeline/04_feature_importance.py --mode explore --features-dir data/features/n01/ --models-pkl data/models/n01/ratio/<name of pickle file containing model results - full> --output-dir data/models/n01/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max --allow-cluster-collisions`
 
-`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n01/ --models-pkl data/models/n01/ratio/nested-cv-results-full-u_ks-kh_ks-ss-b2384de.pkl --reduced-models-pkl data/models/n01/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-b2384de.pkl --output-dir data/models/n01/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max --allow-cluster-collisions`
+`python pipeline/04_feature_importance.py --mode reduced --features-dir data/features/n01/ --models-pkl data/models/n01/ratio/<name of pickle file containing model results - full> --reduced-models-pkl data/models/n01/ratio/reduced/<name of pickle file containing model results - reduced> --output-dir data/models/n01/ratio/reduced --cluster-threshold 0.25 --cluster-selection domain --domain-features n0 crv_kurt Rb Rb0 hyp_int Rl0 crv_mean htcrv_min Z_cv grd0_mean Z_mean htcrv_max --allow-cluster-collisions`
 
 do grouped permutation for collinear features in n01
 `python pipeline/04_feature_importance.py     --mode grouped     --features-dir data/features/n01     --models-pkl data/models/n01/ratio/reduced/nested-cv-results-reduced-u_ks-kh_ks-ss-b2384de.pkl     --output-dir data/models/n01/ratio/reduced/grouped-features     --feature-groups Rl0+Rb0`

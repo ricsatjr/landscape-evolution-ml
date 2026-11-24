@@ -72,6 +72,14 @@ names, with ``-ss`` appended when the models were trained on the
 steady-state subset, matching the tag ``03_train_models.py`` applies, so
 that filtered and unfiltered outputs of the same git hash do not collide.
 
+``--run-tag`` appends a further token after the ``-ss`` marker.  It is needed
+whenever two runs differ only in arguments the filename does not record — a
+changed ``--domain-features`` above all, which alters every result below while
+leaving ``{label_tag}`` untouched.  The tag is inherited from the input pkl
+``_meta`` when it is not supplied here, so that a tagged training run carries
+its tag into every downstream analysis, and is stored in the reduced pkl
+``_meta`` for the same reason.
+
 Permutation importance outputs carry an additional target suffix:
     feature-importance-{target_col}-{label_tag}-{hash}   <- per-target
     feature-importance-all-{label_tag}-{hash}             <- combined
@@ -117,11 +125,25 @@ Usage
         --models-pkl outputs/models/nested-cv-results-reduced-abc1234.pkl \\
         --output-dir outputs/grouped \\
         --feature-groups Rl0+Rb0
+
+    # Reduced run on a subset of an earlier feature list, tagged so that it
+    # cannot overwrite the outputs of the run it is compared against
+    python 04_feature_importance.py \\
+        --mode reduced \\
+        --features-dir data/features \\
+        --models-pkl outputs/models/nested-cv-results-full-abc1234.pkl \\
+        --reduced-models-pkl outputs/models/nested-cv-results-reduced-subset-abc1234.pkl \\
+        --output-dir outputs/reduced \\
+        --cluster-threshold 0.25 \\
+        --cluster-selection domain \\
+        --domain-features Rb Rb0 Rl0 hyp_int crv_mean grd0_mean htcrv_min \\
+        --run-tag subset
 """
 
 import argparse
 import os
 import pickle
+import re
 from collections import defaultdict
 
 import matplotlib
@@ -1065,6 +1087,11 @@ def build_feature_groups(group_specs: list, reduced_features: list) -> list:
 # CLI
 # =============================================================================
 
+#: Characters permitted in ``--run-tag``.  The tag is interpolated into output
+#: filenames, so anything that could alter a path is rejected.
+_TAG_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description=(
@@ -1127,6 +1154,19 @@ def parse_args():
             'models, and _meta (label names, split indices, git hash, CV '
             'parameters, cluster selection method, domain features).  '
             'Required when --mode reduced is set.'
+        ),
+    )
+    p.add_argument(
+        '--run-tag',
+        default=None,
+        help=(
+            'Short filename-safe token appended to the output filename tag, '
+            'after any -ss marker.  Use it to keep runs apart when they '
+            'differ only in arguments that the filename does not record, a '
+            'changed --domain-features above all.  Letters, digits, hyphen, '
+            'underscore and period only.  Inherited from the --models-pkl '
+            '_meta when omitted, and stored in the reduced pkl _meta so that '
+            'later importance and grouped runs carry it too.'
         ),
     )
 
@@ -1297,6 +1337,9 @@ def parse_args():
         p.error("--cluster-selection domain requires --domain-features")
     if args.mode == 'grouped' and args.feature_groups is None:
         p.error("--mode grouped requires --feature-groups")
+    if args.run_tag and not _TAG_PATTERN.match(args.run_tag):
+        p.error("--run-tag must be a filename-safe token: letters, digits, "
+                "hyphen, underscore or period only")
 
     return args
 
@@ -1361,6 +1404,15 @@ def main():
     # outputs of the same git hash cannot overwrite one another.
     ss_tag = '-ss' if meta.get('retained_csv') else ''
 
+    # --run-tag separates runs that differ only in arguments the filename does
+    # not record, and is applied after the -ss marker so that the two always
+    # read in a fixed order.  A tag supplied here takes precedence over one
+    # recorded in the input pkl, so that a reduced run can be tagged
+    # independently of the full-feature run it derives from; absent that, the
+    # input pkl's tag is carried through rather than silently dropped.
+    tag      = args.run_tag or meta.get('run_tag')
+    run_tag  = f'-{tag}' if tag else ''
+
     # ── EXPLORE mode ───────────────────────────────────────────────────────────
     if args.mode == 'explore':
         print("\n── Mode: explore ──")
@@ -1375,7 +1427,7 @@ def main():
             dist_thresh=args.cluster_threshold,
             output_dir=args.output_dir,
             git_hash=git_hash,
-            label_tag='explore' + ss_tag,
+            label_tag='explore' + ss_tag + run_tag,
             cluster_selection=args.cluster_selection,
             domain_features=args.domain_features,
             random_state=args.random_state,
@@ -1396,7 +1448,7 @@ def main():
     print(f"  random_state : {meta.get('random_state')}")
     print(f"  train/test   : {len(train_ids)} / {len(test_ids)}")
 
-    label_tag         = '-'.join(label_names) + ss_tag
+    label_tag         = '-'.join(label_names) + ss_tag + run_tag
     random_state_meta = meta.get('random_state', args.random_state)
 
     # X carries no identifier columns, so the identities are applied to the
@@ -1466,6 +1518,7 @@ def main():
             'label_names':           list(y_train.columns),
             'job_ids':               sorted(df['job_id'].unique().tolist()),
             'retained_csv':          meta.get('retained_csv'),
+            'run_tag':               tag,
             'id_keys':               id_keys,
             'train_ids':             train_ids,
             'test_ids':              test_ids,
