@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ── Project data and derived artifacts ───────────────────────────────────────
+# Datasets, intermediates and trained models are distributed through Zenodo,
+# not through git. Several rasnet pickles exceed GitHub's 100 MB per-file hard
+# limit, so a blanket `git add -A` would fail the push after a long upload.
+data/
+outputs/
+
+# The Zenodo deposit: keep its documentation under version control, nothing
+# else. The trailing /* is required — `zenodo/` would exclude the directory
+# itself, and git cannot re-include a path whose parent directory is excluded,
+# so the negations below would silently do nothing.
+zenodo/*
+!zenodo/README.md
