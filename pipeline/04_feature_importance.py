@@ -25,7 +25,9 @@ reduced
     ``_meta``.  Runs nested CV on the reduced feature set, trains final
     reduced-feature models, compares full vs reduced generalisation
     performance, and runs permutation importance.  Saves the reduced-feature
-    results to ``--reduced-models-pkl``.
+    results to ``--reduced-models-pkl``, or, when that is omitted, to a path
+    derived from the same ``{label_tag}`` and ``{git_hash}`` as the figures
+    written beside it.
 
 importance
     Permutation importance analysis only.  Requires ``--models-pkl`` pointing
@@ -79,6 +81,21 @@ leaving ``{label_tag}`` untouched.  The tag is inherited from the input pkl
 ``_meta`` when it is not supplied here, so that a tagged training run carries
 its tag into every downstream analysis, and is stored in the reduced pkl
 ``_meta`` for the same reason.
+
+``--source-hash-tag`` appends ``-src{source_git_hash}`` immediately before the
+trailing ``{git_hash}``, where ``{source_git_hash}`` is the commit recorded in
+the ``--models-pkl`` ``_meta``.  The two hashes then read as source then run,
+matching the ``{data hash}-fig-{figure hash}`` convention of
+``01c_screen_model_time.py``.  It is needed whenever a run is made at a
+different commit from the run it derives from, which the trailing hash alone
+does not record.
+
+The source is always the immediate parent, one hop back: the full-feature run
+in explore and reduced modes, the reduced run in importance and grouped modes.
+Longer chains are not folded into the tag.  The source hash is written to the
+reduced pkl ``_meta`` as ``source_git_hash`` whether or not the flag is set, so
+that an importance run naming its reduced parent still leads back to the
+full-feature commit through that parent's own ``_meta``.
 
 Permutation importance outputs carry an additional target suffix:
     feature-importance-{target_col}-{label_tag}-{hash}   <- per-target
@@ -343,6 +360,7 @@ def get_feature_clusters(
     domain_features: list | None = None,
     random_state: int = 42,
     enforce_one_per_cluster: bool = True,
+    save_figure: bool = True,
 ) -> tuple:
     """Identify multicollinear feature clusters via hierarchical clustering.
 
@@ -371,6 +389,12 @@ def get_feature_clusters(
         Git hash suffix appended to output filenames for provenance.
     label_tag : str
         Hyphen-joined target label names, appended to output filenames.
+    save_figure : bool
+        True (default) writes the dendrogram to ``output_dir``.  False computes
+        the clustering and returns it without writing anything, for callers
+        that need the membership of a pkl whose ``_meta`` predates
+        ``cluster_info`` and must not overwrite the figure of the run that
+        produced it.
     cluster_selection : str
         ``'domain'``: use the list supplied in ``domain_features``.  Each
         feature must be present in ``X.columns``; raises ``ValueError`` if any
@@ -399,10 +423,21 @@ def get_feature_clusters(
     -------
     reduced_features : list of str
         Selected representative feature names, one per cluster.
-    cluster_id_to_feature_ids : dict
-        Maps cluster ID (int) to a list of feature column indices (int) within
-        that cluster.  Used downstream to annotate importance tables with
-        cluster companions.
+    cluster_info : dict
+        The clustering itself, in a form that needs neither the feature data
+        nor the figure to interpret:
+
+        ``members``
+            Maps cluster ID (int) to the feature names in that cluster.  Used
+            downstream to annotate importance tables with cluster companions.
+        ``linkage``
+            Ward linkage matrix, shape ``(n_features - 1, 4)``; redraws the
+            dendrogram.
+        ``leaf_order``
+            Feature names in plotted order, top to bottom.
+        ``distance_matrix``
+            ``1 - |Spearman rho|``, shape ``(n_features, n_features)``; re-cuts
+            the dendrogram at any threshold.
     """
     corr = np.array(spearmanr(X).correlation)
     # Replace NaNs from constant-valued columns (zero variance) with 0
@@ -512,12 +547,28 @@ def get_feature_clusters(
     ax.tick_params(axis='both', labelsize=8)
 
     fig.tight_layout()
-    stem = os.path.join(output_dir, f'feature-clustering-{label_tag}-{git_hash}')
-    fig.savefig(stem + '.png', dpi=300)
-    fig.savefig(stem + '.svg')
+    if save_figure:
+        stem = os.path.join(
+            output_dir, f'feature-clustering-{label_tag}-{git_hash}'
+        )
+        fig.savefig(stem + '.png', dpi=300)
+        fig.savefig(stem + '.svg')
     plt.close(fig)
 
-    return reduced_features, cluster_id_to_feature_ids
+    # Everything needed to redraw or re-cut the dendrogram without the feature
+    # data, so that a reduced pkl carries its own clustering rather than
+    # leaving it recoverable only from the figure.  Membership is keyed by
+    # feature name, not by column index, so that it survives any later change
+    # in column order.
+    cluster_info = {
+        'members':         {int(cid): [X.columns[i] for i in ids]
+                            for cid, ids in cluster_id_to_feature_ids.items()},
+        'linkage':         dist_linkage,
+        'leaf_order':      [X.columns[i] for i in dendrogram_order],
+        'distance_matrix': distance_matrix,
+    }
+
+    return reduced_features, cluster_info
 
 
 # =============================================================================
@@ -787,9 +838,8 @@ def compute_grouped_permutation_importance(
 
 def analyze_feature_importance(
     results: dict,
-    all_features: list,
     reduced_features: list,
-    cluster_id_to_feature_ids: dict,
+    cluster_members: dict,
     X_test: pd.DataFrame,
     y_test: pd.DataFrame,
     output_dir: str,
@@ -814,13 +864,13 @@ def analyze_feature_importance(
     results : dict
         Reduced-feature nested-CV results with ``final_model`` entries, as
         produced by the ``reduced`` mode of this script.
-    all_features : list of str
-        Full list of feature names, used to look up cluster companions.
     reduced_features : list of str
         The selected representative feature subset.
-    cluster_id_to_feature_ids : dict
-        Maps cluster ID to list of feature column indices, from
-        ``get_feature_clusters``.
+    cluster_members : dict
+        Maps cluster ID to the feature names in that cluster, used to look up
+        cluster companions.  Comes from ``cluster_info['members']``, either as
+        returned by ``get_feature_clusters`` or as recorded in the reduced
+        pkl's ``_meta``.
     X_test : pd.DataFrame
         Reduced test feature matrix (columns = ``reduced_features``).
     y_test : pd.DataFrame
@@ -926,8 +976,7 @@ def analyze_feature_importance(
     # cluster; a group row carries the union of its members' companions with
     # the members themselves excluded.
     feature_to_companions = {}
-    for feat_ids in cluster_id_to_feature_ids.values():
-        cluster_names = [all_features[v] for v in feat_ids]
+    for cluster_names in cluster_members.values():
         for name in cluster_names:
             feature_to_companions[name] = [n for n in cluster_names
                                            if n != name]
@@ -1153,7 +1202,10 @@ def parse_args():
             'reduced mode.  The pkl stores nested-CV results, final fitted '
             'models, and _meta (label names, split indices, git hash, CV '
             'parameters, cluster selection method, domain features).  '
-            'Required when --mode reduced is set.'
+            'Optional: when omitted it is derived as '
+            'nested-cv-results-reduced-{label_tag}-{git_hash}.pkl inside '
+            '--output-dir, so that it carries the same -ss, --run-tag and '
+            '-src markers as the figures and CSVs written beside it.'
         ),
     )
     p.add_argument(
@@ -1169,6 +1221,21 @@ def parse_args():
             'later importance and grouped runs carry it too.'
         ),
     )
+    p.add_argument(
+        '--source-hash-tag',
+        action='store_true',
+        help=(
+            'Append -src{source_git_hash} before the trailing git hash of '
+            'every output filename, including the dendrogram, where '
+            '{source_git_hash} is the commit recorded in the --models-pkl '
+            '_meta, that is the immediate parent: the full-feature run in '
+            'explore and reduced modes, the reduced run in importance and '
+            'grouped modes.  Set it when a run is made at a different commit '
+            'from the run it derives from, so that both commits are readable '
+            'from the filename.  The source hash is recorded in the reduced '
+            'pkl _meta regardless of this flag.'
+        ),
+    )
 
     # ── Mode ──────────────────────────────────────────────────────────────────
     p.add_argument(
@@ -1179,8 +1246,8 @@ def parse_args():
             'Analysis mode (default: importance).  '
             'explore: correlation analysis and dendrogram only.  '
             'reduced: full pipeline from clustering through to permutation '
-            'importance, requires --models-pkl (full-feature) and '
-            '--reduced-models-pkl (output path).  '
+            'importance, requires --models-pkl (full-feature); the output pkl '
+            'path is --reduced-models-pkl, or derived when that is omitted.  '
             'importance: permutation importance only on existing reduced-feature '
             'models, requires --models-pkl (reduced-feature).  '
             'grouped: as importance, but the features named in '
@@ -1329,8 +1396,6 @@ def parse_args():
     args = p.parse_args()
 
     # ── Argument validation ────────────────────────────────────────────────────
-    if args.mode == 'reduced' and args.reduced_models_pkl is None:
-        p.error("--mode reduced requires --reduced-models-pkl")
     if (args.mode in ('explore', 'reduced')
             and args.cluster_selection == 'domain'
             and args.domain_features is None):
@@ -1413,6 +1478,18 @@ def main():
     tag      = args.run_tag or meta.get('run_tag')
     run_tag  = f'-{tag}' if tag else ''
 
+    # The commit of the run that produced --models-pkl, as against git_hash
+    # above, which is the commit of this run.  It is always the immediate
+    # parent, one hop back: the full-feature run in explore and reduced modes,
+    # the reduced run in importance and grouped modes.  The chain beyond that
+    # hop is not folded in here; it is recovered from the parent pkl's own
+    # source_git_hash, so that every output names the input it was actually
+    # derived from.  The tag sits immediately before the trailing hash so that
+    # the pair reads as source then run, as the {data hash}-fig-{figure hash}
+    # outputs of 01c_screen_model_time.py do.
+    source_hash = meta.get('git_hash')
+    src_tag     = f'-src{source_hash}' if (args.source_hash_tag and source_hash) else ''
+
     # ── EXPLORE mode ───────────────────────────────────────────────────────────
     if args.mode == 'explore':
         print("\n── Mode: explore ──")
@@ -1427,7 +1504,7 @@ def main():
             dist_thresh=args.cluster_threshold,
             output_dir=args.output_dir,
             git_hash=git_hash,
-            label_tag='explore' + ss_tag + run_tag,
+            label_tag='explore' + ss_tag + run_tag + src_tag,
             cluster_selection=args.cluster_selection,
             domain_features=args.domain_features,
             random_state=args.random_state,
@@ -1445,10 +1522,11 @@ def main():
     label_names = meta['label_names']
     print(f"  label_names  : {label_names}")
     print(f"  git_hash     : {meta.get('git_hash')}")
+    print(f"  source_hash  : {source_hash}")
     print(f"  random_state : {meta.get('random_state')}")
     print(f"  train/test   : {len(train_ids)} / {len(test_ids)}")
 
-    label_tag         = '-'.join(label_names) + ss_tag + run_tag
+    label_tag         = '-'.join(label_names) + ss_tag + run_tag + src_tag
     random_state_meta = meta.get('random_state', args.random_state)
 
     # X carries no identifier columns, so the identities are applied to the
@@ -1470,8 +1548,19 @@ def main():
     if args.mode == 'reduced':
         print("\n── Mode: reduced ──")
 
+        # The pkl is the one output of this mode that is not auto-named, so an
+        # explicit path is the one that can fall out of step with the figures
+        # and CSVs written beside it.  Derived from the same label_tag and hash
+        # when omitted, it carries whatever -ss, --run-tag and -src markers
+        # they carry.  An explicit path is still honoured unchanged.
+        reduced_models_pkl = args.reduced_models_pkl or os.path.join(
+            args.output_dir,
+            f'nested-cv-results-reduced-{label_tag}-{git_hash}.pkl'
+        )
+        print(f"Reduced models -> {reduced_models_pkl}")
+
         # 1. Feature clustering on training set only
-        reduced_features, cluster_id_to_feature_ids = get_feature_clusters(
+        reduced_features, cluster_info = get_feature_clusters(
             X_train,
             dist_thresh=args.cluster_threshold,
             output_dir=args.output_dir,
@@ -1482,6 +1571,7 @@ def main():
             random_state=args.random_state,
             enforce_one_per_cluster=not args.allow_cluster_collisions,
         )
+        cluster_members = cluster_info['members']
         X_train_red = X_train[reduced_features]
         X_test_red  = X_test[reduced_features]
 
@@ -1532,6 +1622,8 @@ def main():
             'domain_features':       args.domain_features,
             'allow_cluster_collisions': args.allow_cluster_collisions,
             'full_models_pkl':       args.models_pkl,
+            'source_git_hash':       source_hash,
+            'cluster_info':          cluster_info,
         }
 
         # 3. Train final reduced models (skip if already present)
@@ -1550,9 +1642,9 @@ def main():
         else:
             print("\nFinal reduced-feature models already present — skipping retraining.")
 
-        with open(args.reduced_models_pkl, 'wb') as fh:
+        with open(reduced_models_pkl, 'wb') as fh:
             pickle.dump(red_results, fh, protocol=pickle.HIGHEST_PROTOCOL)
-        print(f"\nReduced models saved -> {args.reduced_models_pkl}")
+        print(f"\nReduced models saved -> {reduced_models_pkl}")
 
         # 4. Full vs reduced comparison
         plt.close('all')
@@ -1590,23 +1682,37 @@ def main():
                 f"Re-run with --mode reduced to generate a valid reduced-feature pkl."
             )
 
-        # Re-run clustering on the FULL training feature set to recover
-        # cluster_id_to_feature_ids for companion annotation in the importance
-        # table.  Clustering parameters are taken from _meta to ensure
-        # consistency with the original reduced run.
-        X_train_full = X_train[meta['feature_names']]
-        _, cluster_id_to_feature_ids = get_feature_clusters(
-            X_train_full,
-            dist_thresh=meta.get('cluster_threshold', args.cluster_threshold),
-            output_dir=args.output_dir,
-            git_hash=git_hash,
-            label_tag=label_tag,
-            cluster_selection=meta.get('cluster_selection', args.cluster_selection),
-            domain_features=meta.get('domain_features', args.domain_features),
-            random_state=args.random_state,
-            enforce_one_per_cluster=not meta.get(
-                'allow_cluster_collisions', args.allow_cluster_collisions),
-        )
+        # Cluster membership drives the companion annotation in the importance
+        # table.  Take it from the pkl rather than recomputing it, so that the
+        # annotation describes the clustering the reduced models were actually
+        # built on.  Recomputing would read the feature matrix from disk again,
+        # and any change there — edited features pkl, different --job-ids —
+        # would silently annotate against a different clustering.
+        cluster_info = meta.get('cluster_info')
+        if cluster_info:
+            cluster_members = cluster_info['members']
+        else:
+            # Pkl predates cluster_info.  Recover the membership by repeating
+            # the clustering under the pkl's own parameters, without writing a
+            # dendrogram: the figure belongs to the run that produced the pkl
+            # and must not be overwritten by this one.
+            print("\n_meta has no cluster_info (pkl predates it) — "
+                  "recomputing cluster membership; no dendrogram written.")
+            _, cluster_info = get_feature_clusters(
+                X_train[meta['feature_names']],
+                dist_thresh=meta.get('cluster_threshold', args.cluster_threshold),
+                output_dir=args.output_dir,
+                git_hash=git_hash,
+                label_tag=label_tag,
+                cluster_selection=meta.get('cluster_selection',
+                                           args.cluster_selection),
+                domain_features=meta.get('domain_features', args.domain_features),
+                random_state=args.random_state,
+                enforce_one_per_cluster=not meta.get(
+                    'allow_cluster_collisions', args.allow_cluster_collisions),
+                save_figure=False,
+            )
+            cluster_members = cluster_info['members']
         X_train_red = X_train[reduced_features]
         X_test_red  = X_test[reduced_features]
 
@@ -1646,9 +1752,8 @@ def main():
         plt.close('all')
         feat_imp_df = analyze_feature_importance(
             results_for_importance,
-            all_features=all_features,
             reduced_features=reduced_features,
-            cluster_id_to_feature_ids=cluster_id_to_feature_ids,
+            cluster_members=cluster_members,
             X_test=X_test_red,
             y_test=y_test,
             output_dir=args.output_dir,
